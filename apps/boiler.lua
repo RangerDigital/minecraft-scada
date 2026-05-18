@@ -147,24 +147,34 @@ local function readFromTarget(p)
   local data = {}
   local found = false
 
+  print("[DEBUG] readFromTarget lines:")
   for n = 1, 12 do
     local l = line(n)
+    print("  [" .. n .. "] >>>" .. l .. "<<<")
     if l == "" then break end
     local ll = l:lower()
     local after = l:match(":%s*(.+)") or l
     if ll:find("water") then
       data.waterAmount, data.waterCap = parsePair(after)
+      print("    matched water: " .. tostring(data.waterAmount) .. " / " .. tostring(data.waterCap))
       found = true
     elseif ll:find("steam") then
       data.steamAmount, data.steamCap = parsePair(after)
+      print("    matched steam: " .. tostring(data.steamAmount) .. " / " .. tostring(data.steamCap))
       found = true
     elseif ll:find("temp") then
       data.temp, data.maxTemp = parsePair(after)
+      print("    matched temp: " .. tostring(data.temp) .. " / " .. tostring(data.maxTemp))
       found = true
+    else
+      print("    no keyword match")
     end
   end
 
-  if not found then return nil end
+  if not found then
+    print("[DEBUG] readFromTarget: no data found, returning nil")
+    return nil
+  end
 
   return {
     waterAmount = data.waterAmount or 0,
