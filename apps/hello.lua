@@ -1,35 +1,20 @@
 -- =========================================================
---  Factory OS SCADA v1.7
+--  Factory OS SCADA Monitor v2.0
 -- =========================================================
 
 local PROTOCOL = "factoryos"
 
+local wireless = dofile("/lib/wireless.lua")
+local ui       = dofile("/lib/ui.lua")
+local util     = dofile("/lib/util.lua")
+
 local monitors = { peripheral.find("monitor") }
 
-local wirelessSide = nil
+local wirelessModem = wireless.find()
 
-for _, side in ipairs(peripheral.getNames()) do
-  if peripheral.getType(side) == "modem" then
-    local modem = peripheral.wrap(side)
-
-    local ok, wireless = pcall(function()
-      return modem.isWireless()
-    end)
-
-    if ok and wireless then
-      wirelessSide = side
-      break
-    end
-  end
-end
-
-if wirelessSide then
-  rednet.open(wirelessSide)
-end
-
-local nodes = {}
+local nodes  = {}
 local alarms = {}
-local logs = {}
+local logs   = {}
 
 -- =========================================================
 --  Helpers
@@ -37,232 +22,249 @@ local logs = {}
 
 local function addLog(text)
   table.insert(logs, 1, text)
-
-  while #logs > 20 do
-    table.remove(logs)
-  end
+  while #logs > 30 do table.remove(logs) end
 end
 
 local function addAlarm(text)
   table.insert(alarms, 1, text)
-
-  while #alarms > 10 do
-    table.remove(alarms)
-  end
+  while #alarms > 20 do table.remove(alarms) end
 end
 
-local function clear(mon)
-  mon.setBackgroundColor(colors.black)
-  mon.clear()
-  mon.setCursorPos(1,1)
-end
-
-local function led(mon, x, y, color, on)
-  mon.setCursorPos(x, y)
-  mon.setBackgroundColor(on and color or colors.gray)
-  mon.write(" ")
-  mon.setBackgroundColor(colors.black)
-end
-
-local function header(mon, id, heartbeat)
-  local w, h = mon.getSize()
-
-  paintutils.drawFilledBox(1, 1, w, 1, colors.orange)
-
-  mon.setTextColor(colors.black)
-  mon.setCursorPos(2,1)
-  mon.write("Factory OS SCADA")
-
-  local info = "#" .. id .. " " .. w .. "x" .. h
-
-  if w > #info + 18 then
-    mon.setCursorPos(w - #info - 2, 1)
-    mon.write(info)
-  end
-
-  led(mon, w, 1, colors.lime, heartbeat)
-end
-
-local function statusLine(mon, y, color, text, on)
-  led(mon, 3, y, color, on)
-  mon.setCursorPos(5, y)
-  mon.setTextColor(colors.lightGray)
-  mon.write(text)
-end
+local clear      = ui.clearMon
+local led        = ui.led
+local statusLine = ui.statusLine
 
 local function nodeAlive(node)
   return (os.epoch("utc") - node.lastSeen) < 6000
 end
 
-local function nodeCount()
-  local count = 0
-
-  for _, node in pairs(nodes) do
-    if nodeAlive(node) then
-      count = count + 1
-    end
-  end
-
-  return count
-end
-
 local function alarmActive()
   for _, node in pairs(nodes) do
-    if node.alarm and nodeAlive(node) then
-      return true
-    end
+    if node.alarm and nodeAlive(node) then return true end
   end
-
   return #alarms > 0
 end
 
-local function shortName(name)
-  return tostring(name)
-    :gsub("minecraft:", "")
-    :gsub("create:", "")
-    :sub(1, 14)
+local shortName = util.shortName
+
+-- =========================================================
+--  Monitor classification
+--    "tiny"   - 1×1 block status monitor
+--    "ticker" - single character-row wide banner (h == 1)
+--    "main"   - normal large display
+-- =========================================================
+
+local function classifyMonitor(w, h)
+  if h == 1 and w > 5 then return "ticker" end
+  if w <= 15 and h <= 10 then return "tiny" end
+  return "main"
 end
 
 -- =========================================================
---  Wide 1-line alarm/log monitor
+--  Tiny monitor (1×1 block) – status LEDs, no header
 -- =========================================================
 
-local scroll = 0
-
-local function drawTicker(mon, id, heartbeat)
+local function drawTiny(mon, heartbeat)
   clear(mon)
+  local _, h = mon.getSize()
+  -- Distribute 3 LED rows with spacing, with top padding
+  local step = math.max(1, math.min(2, math.floor((h - 1) / 3)))
+  local top  = 2
+  statusLine(mon, 2, top,          colors.lime, "HB",    heartbeat)
+  statusLine(mon, 2, top + step,   colors.cyan, "NET",   wirelessModem ~= nil)
+  statusLine(mon, 2, top + step*2,
+    alarmActive() and colors.red or colors.gray, "ALARM", alarmActive())
+end
 
-  local w, h = mon.getSize()
+-- =========================================================
+--  Ticker (h == 1, wide) – scrolling logs / alarms
+-- =========================================================
 
-  local source = ""
+local tickerScroll = 0
 
+local function drawTicker(mon, heartbeat)
+  local w = mon.getSize()
+
+  local source
   if #alarms > 0 then
-    source = " ALARMS: " .. table.concat(alarms, "  |  ")
+    source = "  ALARMS: " .. table.concat(alarms, "  |  ")
+  elseif #logs > 0 then
+    source = "  LOGS: " .. table.concat(logs, "  |  ")
   else
-    source = " LOGS: " .. table.concat(logs, "  |  ")
+    source = "  Factory OS SCADA online  "
   end
 
-  if source == "" then
-    source = " Factory OS SCADA online "
-  end
+  source = source .. "   "
 
-  source = source .. "     "
+  tickerScroll = tickerScroll + 1
+  if tickerScroll > #source then tickerScroll = 1 end
 
-  scroll = scroll + 1
-  if scroll > #source then scroll = 1 end
+  local text = source:sub(tickerScroll) .. source:sub(1, tickerScroll - 1)
 
-  local text = source:sub(scroll) .. source:sub(1, scroll)
-
+  mon.setBackgroundColor(colors.black)
   mon.setTextColor(#alarms > 0 and colors.red or colors.orange)
-  mon.setCursorPos(1,1)
-  mon.write(text:sub(1,w))
+  mon.setCursorPos(1, 1)
+  mon.write(text:sub(1, w - 1))
 
   led(mon, w, 1, colors.lime, heartbeat)
 end
 
 -- =========================================================
---  Main screens
+--  Header bar
 -- =========================================================
 
-local function drawMain(mon, heartbeat, id)
+local function drawHeader(mon, id, heartbeat)
+  local w, h = mon.getSize()
+
+  paintutils.drawFilledBox(1, 1, w, 1, colors.orange)
+  mon.setBackgroundColor(colors.orange)
+  mon.setTextColor(colors.black)
+
+  local info  = "#" .. id .. " " .. w .. "x" .. h
+  local title = "Factory OS Monitor"
+
+  mon.setCursorPos(2, 1)
+  if w >= #title + #info + 4 then
+    mon.write(title)
+    mon.setCursorPos(w - #info - 1, 1)
+    mon.write(info)
+  elseif w >= #info + 3 then
+    mon.write(info)
+  end
+
+  -- Wireless ender modem status LED (rightmost cell of header)
+  led(mon, w, 1, wirelessModem and colors.cyan or colors.red, wirelessModem ~= nil)
+
+  mon.setBackgroundColor(colors.black)
+  mon.setTextColor(colors.white)
+end
+
+-- =========================================================
+--  Widgets
+-- =========================================================
+
+local function widgetStorage(mon, name, node, ox, y, w, budget)
+  led(mon, ox, y, nodeAlive(node) and colors.lime or colors.red, true)
+  mon.setCursorPos(ox + 2, y)
+  mon.setTextColor(colors.cyan)
+  mon.write(shortName(name) .. " [storage]")
+
+  local rows = 1
+
+  if node.items then
+    for _, item in ipairs(node.items) do
+      if rows >= budget then break end
+      mon.setCursorPos(ox + 2, y + rows)
+      mon.setTextColor(item.overflow > 0 and colors.red or colors.lime)
+      mon.write(string.format(
+        "%-12s %5d/%-5d %+d",
+        shortName(item.item),
+        item.current  or 0,
+        item.limit    or 0,
+        item.overflow or 0
+      ))
+      rows = rows + 1
+    end
+  end
+
+  return rows
+end
+
+local function widgetTank(mon, name, node, ox, y, w, budget)
+  local pct = node.percent or 0
+
+  led(mon, ox, y, nodeAlive(node) and colors.lime or colors.red, true)
+  mon.setCursorPos(ox + 2, y)
+
+  if node.alarm then
+    mon.setTextColor(colors.red)
+  elseif pct < 50 then
+    mon.setTextColor(colors.yellow)
+  else
+    mon.setTextColor(colors.lime)
+  end
+
+  mon.write(string.format(
+    "%-14s %3d%%  %-11s",
+    shortName(node.fluid or "empty"),
+    pct,
+    node.level or "?"
+  ))
+
+  if budget < 2 then return 1 end
+
+  -- Fill bar
+  local barW   = math.min(w - ox - 2, 24)
+  local filled = math.floor(barW * math.min(pct, 100) / 100)
+  local barColor = node.alarm and colors.red
+    or (pct < 50 and colors.yellow or colors.lime)
+
+  mon.setCursorPos(ox + 2, y + 1)
+  for i = 1, barW do
+    mon.setBackgroundColor(i <= filled and barColor or colors.gray)
+    mon.write(" ")
+  end
+  mon.setBackgroundColor(colors.black)
+
+  return 2
+end
+
+-- =========================================================
+--  Main monitor
+-- =========================================================
+
+local function drawMain(mon, id, heartbeat)
   clear(mon)
 
   local w, h = mon.getSize()
 
-  header(mon, id, heartbeat)
+  drawHeader(mon, id, heartbeat)
 
-  statusLine(mon, 3, colors.lime, "HB", heartbeat)
-  statusLine(mon, 5, wirelessSide and colors.cyan or colors.red, "NET", wirelessSide ~= nil)
-  statusLine(mon, 7, alarmActive() and colors.red or colors.gray, "ALARM", alarmActive())
-
-  mon.setTextColor(colors.gray)
-  mon.setCursorPos(3,9)
-  mon.write("Modem: " .. tostring(wirelessSide))
-
-  mon.setTextColor(colors.cyan)
-  mon.setCursorPos(3,12)
-  mon.write("Network Nodes")
-
-  local y = 14
-
+  -- Collect live nodes sorted by name for stable layout
+  local live = {}
   for name, node in pairs(nodes) do
-    local alive = nodeAlive(node)
-
-    led(mon, 3, y, alive and colors.lime or colors.red, true)
-
-    mon.setCursorPos(5, y)
-    mon.setTextColor(colors.white)
-    mon.write(name .. " [" .. tostring(node.app or "?") .. "]")
-
-    y = y + 1
-
-    if node.app == "storage" and node.items then
-      for _, item in ipairs(node.items) do
-        if y > h then return end
-
-        mon.setCursorPos(7, y)
-
-        if item.overflow > 0 then
-          mon.setTextColor(colors.red)
-        else
-          mon.setTextColor(colors.lime)
-        end
-
-        mon.write(string.format(
-          "%-12s %5d/%-5d %+d",
-          shortName(item.item),
-          item.current or 0,
-          item.limit or 0,
-          item.overflow or 0
-        ))
-
-        y = y + 1
-      end
+    if nodeAlive(node) then
+      table.insert(live, { name = name, node = node })
     end
-
-    if node.app == "tank" then
-      if y > h then return end
-
-      mon.setCursorPos(7, y)
-
-      if node.alarm then
-        mon.setTextColor(colors.red)
-      elseif node.percent < 50 then
-        mon.setTextColor(colors.yellow)
-      else
-        mon.setTextColor(colors.lime)
-      end
-
-      mon.write(string.format(
-        "%-12s %3d%% %s",
-        shortName(node.fluid),
-        node.percent or 0,
-        node.level or "?"
-      ))
-
-      y = y + 1
-    end
-
-    y = y + 1
-
-    if y > h then return end
   end
-end
+  table.sort(live, function(a, b) return a.name < b.name end)
 
--- =========================================================
---  Status-only small monitor
--- =========================================================
+  if #live == 0 then
+    mon.setCursorPos(3, 3)
+    mon.setTextColor(colors.gray)
+    mon.write("Waiting for SCADA nodes...")
+    statusLine(mon, 3, 5, colors.lime, "HB",    heartbeat)
+    statusLine(mon, 3, 7, colors.cyan, "NET",   wirelessModem ~= nil)
+    statusLine(mon, 3, 9,
+      alarmActive() and colors.red or colors.gray, "ALARM", alarmActive())
+    return
+  end
 
-local function drawStatusOnly(mon, heartbeat, id)
-  clear(mon)
+  -- Distribute available height evenly across discovered nodes
+  local contentH = h - 2
+  local perNode  = math.max(2, math.floor(contentH / #live))
 
-  statusLine(mon, 1, colors.lime, "HB", heartbeat)
-  statusLine(mon, 3, wirelessSide and colors.cyan or colors.red, "NET", wirelessSide ~= nil)
-  statusLine(mon, 5, alarmActive() and colors.red or colors.gray, "ALARM", alarmActive())
+  local y = 3
+  for _, entry in ipairs(live) do
+    if y > h then break end
 
-  mon.setCursorPos(5,7)
-  mon.setTextColor(colors.orange)
-  mon.write("NODES " .. nodeCount())
+    local budget = math.min(perNode, h - y + 1)
+    local used
+
+    if entry.node.app == "storage" then
+      used = widgetStorage(mon, entry.name, entry.node, 2, y, w, budget)
+    elseif entry.node.app == "tank" then
+      used = widgetTank(mon, entry.name, entry.node, 2, y, w, budget)
+    else
+      led(mon, 2, y, nodeAlive(entry.node) and colors.lime or colors.gray, true)
+      mon.setCursorPos(4, y)
+      mon.setTextColor(colors.lightGray)
+      mon.write(shortName(entry.name) .. " [" .. tostring(entry.node.app or "?") .. "]")
+      used = 1
+    end
+
+    y = y + used + 1
+  end
 end
 
 -- =========================================================
@@ -276,33 +278,28 @@ local function networkLoop()
     if type(msg) == "table" then
       if msg.type == "storage_status" then
         nodes[msg.node] = {
-          app = "storage",
-          lastSeen = os.epoch("utc"),
-          items = msg.items or {},
+          app          = "storage",
+          lastSeen     = os.epoch("utc"),
+          items        = msg.items or {},
           latestExport = msg.latestExport or "none",
-          alarm = false
+          alarm        = false,
         }
+        addLog("storage " .. tostring(msg.node) .. " updated")
 
-        addLog("storage " .. tostring(msg.node) .. " update")
-      end
-
-      if msg.type == "tank_status" then
+      elseif msg.type == "tank_status" then
         nodes[msg.node] = {
-          app = "tank",
+          app      = "tank",
           lastSeen = os.epoch("utc"),
-          tank = msg.tank,
-          fluid = msg.fluid,
-          amount = msg.amount,
+          fluid    = msg.fluid,
+          amount   = msg.amount,
           capacity = msg.capacity,
-          percent = msg.percent or 0,
-          level = msg.level,
-          alarm = msg.alarm
+          percent  = msg.percent or 0,
+          level    = msg.level,
+          alarm    = msg.alarm,
         }
-
         addLog("tank " .. tostring(msg.node) .. " " .. tostring(msg.percent) .. "%")
-      end
 
-      if msg.type == "alarm" then
+      elseif msg.type == "alarm" then
         addAlarm(tostring(msg.node) .. ": " .. tostring(msg.message))
       end
     end
@@ -314,9 +311,7 @@ end
 -- =========================================================
 
 for _, mon in ipairs(monitors) do
-  pcall(function()
-    mon.setTextScale(0.5)
-  end)
+  pcall(function() mon.setTextScale(0.5) end)
 end
 
 local function uiLoop()
@@ -328,13 +323,14 @@ local function uiLoop()
     for i, mon in ipairs(monitors) do
       pcall(function()
         local w, h = mon.getSize()
+        local kind  = classifyMonitor(w, h)
 
-        if w > 12 and h == 1 then
-          drawTicker(mon, i, heartbeat)
-        elseif i == 4 or (w <= 12 and h <= 8) then
-          drawStatusOnly(mon, heartbeat, i)
+        if kind == "ticker" then
+          drawTicker(mon, heartbeat)
+        elseif kind == "tiny" then
+          drawTiny(mon, heartbeat)
         else
-          drawMain(mon, heartbeat, i)
+          drawMain(mon, i, heartbeat)
         end
       end)
     end
@@ -345,7 +341,4 @@ end
 
 addLog("SCADA booted")
 
-parallel.waitForAny(
-  networkLoop,
-  uiLoop
-)
+parallel.waitForAny(networkLoop, uiLoop)

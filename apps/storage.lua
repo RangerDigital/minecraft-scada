@@ -11,29 +11,14 @@ local CONFIG = {
 }
 
 -- =========================================================
---  Helpers
+--  Shared libraries
 -- =========================================================
 
-local function reset()
+local wireless = dofile("/lib/wireless.lua")
+local ui       = dofile("/lib/ui.lua")
 
-  term.setBackgroundColor(colors.black)
-  term.setTextColor(colors.white)
-
-  term.clear()
-  term.setCursorPos(1,1)
-end
-
-local function led(color, text)
-
-  term.setBackgroundColor(color)
-  write(" ")
-
-  term.setBackgroundColor(colors.black)
-  write(" ")
-
-  term.setTextColor(colors.lightGray)
-  print(text)
-end
+local reset = ui.resetTerm
+local led   = ui.ledTerm
 
 -- =========================================================
 --  Peripherals
@@ -51,33 +36,10 @@ if not depot then
 end
 
 -- =========================================================
---  Wireless modem ONLY
+--  Wireless modem
 -- =========================================================
 
-local wirelessSide = nil
-
-for _, side in ipairs(peripheral.getNames()) do
-
-  if peripheral.getType(side) == "modem" then
-
-    local modem = peripheral.wrap(side)
-
-    local ok, wireless = pcall(function()
-      return modem.isWireless()
-    end)
-
-    if ok and wireless then
-
-      wirelessSide = side
-
-      break
-    end
-  end
-end
-
-if wirelessSide then
-  rednet.open(wirelessSide)
-end
+local _, wirelessSide = wireless.find()
 
 -- =========================================================
 --  Data
@@ -245,14 +207,8 @@ local function drawStatus()
   print("")
 
   led(colors.lime, "Heartbeat")
-  led(colors.cyan, "Wireless")
+  led(wirelessSide and colors.cyan or colors.gray, "NET")
   led(colors.orange, "Overflow Export")
-
-  print("")
-
-  term.setTextColor(colors.gray)
-
-  print("Wireless: " .. tostring(wirelessSide))
 
   print("")
 

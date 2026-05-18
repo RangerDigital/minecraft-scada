@@ -12,20 +12,16 @@ local CONFIG = {
 
 local PROTOCOL = "factoryos"
 
+local wireless = dofile("/lib/wireless.lua")
+local ui       = dofile("/lib/ui.lua")
+local util     = dofile("/lib/util.lua")
+
 -- =========================================================
 --  Node identity
 -- =========================================================
 
-local function readFile(path)
-  if not fs.exists(path) then return nil end
-  local f = fs.open(path, "r")
-  local v = f.readAll()
-  f.close()
-  return v:gsub("%s+$", "")
-end
-
 local nodeName =
-  readFile("/config/node_name.txt")
+  util.readFile("/config/node_name.txt")
   or os.getComputerLabel()
   or ("tank_" .. os.getComputerID())
 
@@ -33,33 +29,17 @@ local nodeName =
 --  Peripheral discovery
 -- =========================================================
 
-local wirelessSide = nil
-
-for _, side in ipairs(peripheral.getNames()) do
-  if peripheral.getType(side) == "modem" then
-    local m = peripheral.wrap(side)
-    local ok, wireless = pcall(function()
-      return m.isWireless()
-    end)
-
-    if ok and wireless then
-      wirelessSide = side
-      break
-    end
-  end
-end
-
-if wirelessSide then
-  rednet.open(wirelessSide)
-end
+local _, wirelessSide = wireless.find()
 
 local tank = nil
 local tankName = nil
 
 for _, name in ipairs(peripheral.getNames()) do
   local p = peripheral.wrap(name)
-
-  if type(p.tanks) == "function" then
+  -- Support CC standard (tanks) and CC:C Bridge (getFluidInTank) fluid APIs
+  if type(p.tanks) == "function"
+    or type(p.getFluidInTank) == "function"
+  then
     tank = p
     tankName = name
     break
@@ -86,44 +66,20 @@ end
 --  UI helpers
 -- =========================================================
 
-local function ledTerm(color, text)
-  term.setBackgroundColor(color)
-  write(" ")
-  term.setBackgroundColor(colors.black)
-  write(" ")
-  term.setTextColor(colors.lightGray)
-  print(text)
-end
-
-local function resetTerm()
-  term.setBackgroundColor(colors.black)
-  term.setTextColor(colors.white)
-  term.clear()
-  term.setCursorPos(1,1)
-end
-
-local function led(mon, x, y, color, on)
-  mon.setCursorPos(x, y)
-  mon.setBackgroundColor(on and color or colors.gray)
-  mon.write(" ")
-  mon.setBackgroundColor(colors.black)
-end
-
-local function statusLine(mon, y, color, text, on)
-  led(mon, 2, y, color, on)
-  mon.setCursorPos(4, y)
-  mon.setTextColor(colors.lightGray)
-  mon.write(text)
-end
+local resetTerm  = ui.resetTerm
+local ledTerm    = ui.ledTerm
+local led        = ui.led
+local statusLine = ui.statusLine
+local shortFluid = util.shortName
 
 local function drawMonitorStatus(mon, heartbeat, alarm)
   mon.setTextScale(0.5)
   mon.setBackgroundColor(colors.black)
   mon.clear()
 
-  statusLine(mon, 1, colors.lime, "HB", heartbeat)
-  statusLine(mon, 3, colors.cyan, "NET", wirelessSide ~= nil)
-  statusLine(mon, 5, colors.red, "ALARM", alarm)
+  statusLine(mon, 2, 1, colors.lime, "HB",    heartbeat)
+  statusLine(mon, 2, 3, colors.cyan, "NET",   wirelessSide ~= nil)
+  statusLine(mon, 2, 5, colors.red,  "ALARM", alarm)
 end
 
 -- =========================================================
@@ -139,46 +95,81 @@ local state = {
   alarm = false
 }
 
+-- Normalise fluid data from different peripheral APIs into
+-- a standard array: { {name, amount, capacity}, ... }
+-- Supports: CC standard tanks(), CC:C Bridge getFluidInTank()
+local function readFluidPeripheral(p)
+  -- Standard CC:Tweaked fluid API
+  if type(p.tanks) == "function" then
+    local ok, data = pcall(function() return p.tanks() end)
+    if ok and type(data) == "table" then return data end
+  end
+
+  -- CC:C Bridge API: getFluidInTank(i), getTankCapacity(i), getTankCount()
+  if type(p.getFluidInTank) == "function" then
+    local ok, count = pcall(function()
+      return type(p.getTankCount) == "function" and p.getTankCount() or 1
+    end)
+    if not ok then count = 1 end
+
+    local result = {}
+    for i = 0, count - 1 do
+      local fOk, fluid = pcall(function() return p.getFluidInTank(i) end)
+      if fOk and type(fluid) == "table" then
+        local cOk, cap = pcall(function()
+          return type(p.getTankCapacity) == "function"
+            and p.getTankCapacity(i)
+            or CONFIG.capacityFallback
+        end)
+        table.insert(result, {
+          name     = fluid.fluidType or fluid.name,
+          amount   = fluid.amount   or 0,
+          capacity = (cOk and cap)  or CONFIG.capacityFallback,
+        })
+      end
+    end
+    if #result > 0 then return result end
+  end
+
+  return nil
+end
+
 local function readTank()
   if not tank then
-    state.fluid = "NO_TANK"
-    state.amount = 0
+    state.fluid    = "NO_TANK"
+    state.amount   = 0
     state.capacity = CONFIG.capacityFallback
-    state.percent = 0
-    state.level = "ALARM"
-    state.alarm = true
+    state.percent  = 0
+    state.level    = "ALARM"
+    state.alarm    = true
     return
   end
 
-  local ok, tanks = pcall(function()
-    return tank.tanks()
-  end)
+  local tankData = readFluidPeripheral(tank)
 
-  if not ok or type(tanks) ~= "table" then
-    state.fluid = "READ_ERROR"
-    state.amount = 0
+  if not tankData then
+    state.fluid    = "READ_ERROR"
+    state.amount   = 0
     state.capacity = CONFIG.capacityFallback
-    state.percent = 0
-    state.level = "ALARM"
-    state.alarm = true
+    state.percent  = 0
+    state.level    = "ALARM"
+    state.alarm    = true
     return
   end
 
-  local totalAmount = 0
+  local totalAmount   = 0
   local totalCapacity = 0
-  local fluidName = "empty"
+  local fluidName     = "empty"
 
-  for _, t in pairs(tanks) do
+  for _, t in pairs(tankData) do
     if type(t) == "table" then
-      local amount = t.amount or 0
+      local amount   = t.amount   or 0
       local capacity = t.capacity or CONFIG.capacityFallback
 
-      totalAmount = totalAmount + amount
+      totalAmount   = totalAmount   + amount
       totalCapacity = totalCapacity + capacity
 
-      if t.name then
-        fluidName = t.name
-      end
+      if t.name then fluidName = t.name end
     end
   end
 
@@ -188,10 +179,10 @@ local function readTank()
 
   local percent = math.floor((totalAmount / totalCapacity) * 100)
 
-  state.fluid = fluidName
-  state.amount = totalAmount
+  state.fluid    = fluidName
+  state.amount   = totalAmount
   state.capacity = totalCapacity
-  state.percent = percent
+  state.percent  = percent
 
   if percent <= CONFIG.lowPercent then
     state.level = "LOW"
@@ -244,10 +235,6 @@ end
 --  Display links
 -- =========================================================
 
-local function shortFluid(name)
-  return tostring(name):gsub("minecraft:", ""):gsub("create:", ""):sub(1, 18)
-end
-
 local function drawDisplayLinks()
   for _, d in ipairs(displayLinks) do
     pcall(function()
@@ -289,7 +276,6 @@ local function drawTerminal()
 
   term.setTextColor(colors.gray)
   print("Node: " .. nodeName)
-  print("Modem: " .. tostring(wirelessSide))
   print("Tank: " .. tostring(tankName))
 
   print("")

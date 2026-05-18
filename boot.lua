@@ -132,7 +132,10 @@ log("INFO", "Selected app: " .. app)
 -- =========================================================
 
 local files = {
-  "apps/" .. app .. ".lua"
+  "apps/" .. app .. ".lua",
+  "lib/wireless.lua",
+  "lib/ui.lua",
+  "lib/util.lua",
 }
 
 for _, path in ipairs(files) do
