@@ -34,46 +34,45 @@ local nodeName =
 local _, wirelessSide = wireless.find()
 
 -- =========================================================
---  DEBUG: dump every peripheral, its type, methods, and
---         getLine output so we can identify boiler targets.
+--  DEBUG: dump every peripheral to /boiler_debug.txt
 -- =========================================================
-print("=== PERIPHERAL DEBUG ===")
-for _, name in ipairs(peripheral.getNames()) do
-  local pType = peripheral.getType(name) or "unknown"
-  local p = peripheral.wrap(name)
-  print("")
-  print("NAME: " .. name .. "  TYPE: " .. pType)
-
-  -- list all methods
-  if type(p) == "table" then
-    local methods = {}
-    for k, v in pairs(p) do
-      if type(v) == "function" then
-        methods[#methods + 1] = k
+do
+  local f = fs.open("/boiler_debug.txt", "w")
+  f.writeLine("=== PERIPHERAL DEBUG ===")
+  for _, name in ipairs(peripheral.getNames()) do
+    local pType = peripheral.getType(name) or "unknown"
+    local p = peripheral.wrap(name)
+    f.writeLine("")
+    f.writeLine("NAME: " .. name .. "  TYPE: " .. pType)
+    if type(p) == "table" then
+      local methods = {}
+      for k, v in pairs(p) do
+        if type(v) == "function" then methods[#methods+1] = k end
       end
-    end
-    table.sort(methods)
-    print("  METHODS: " .. table.concat(methods, ", "))
-
-    -- if it has getLine, dump all lines
-    if type(p.getLine) == "function" then
-      print("  LINES:")
-      for n = 1, 16 do
-        local ok, v = pcall(function() return p.getLine(n) end)
-        if ok and type(v) == "string" then
-          print("    [" .. n .. "] >>>" .. v .. "<<<")
-          if v == "" then break end
-        else
-          print("    [" .. n .. "] ERROR or nil")
-          break
+      table.sort(methods)
+      f.writeLine("  METHODS: " .. table.concat(methods, ", "))
+      if type(p.getLine) == "function" then
+        f.writeLine("  LINES:")
+        for n = 1, 16 do
+          local ok, v = pcall(function() return p.getLine(n) end)
+          if ok and type(v) == "string" then
+            f.writeLine("    [" .. n .. "] >>>" .. v .. "<<<")
+            if v == "" then break end
+          else
+            f.writeLine("    [" .. n .. "] ERROR/nil"); break
+          end
         end
       end
     end
   end
+  f.writeLine("")
+  f.writeLine("=== END ===")
+  f.close()
+  print("Debug written to /boiler_debug.txt")
+  print("Run:  edit /boiler_debug.txt")
+  print("Press Enter to continue...")
+  read()
 end
-print("")
-print("=== END PERIPHERAL DEBUG ===")
-print("")
 
 -- Discover boiler peripherals on the wired network.
 -- Expects CC:C Bridge Display Link Target blocks (expose getLine).
