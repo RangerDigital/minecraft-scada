@@ -37,30 +37,12 @@ local _, wirelessSide = wireless.find()
 -- Expects CC:C Bridge Display Link Target blocks (expose getLine).
 local boilers = {}
 
-print("[DEBUG] All peripherals:")
-for _, name in ipairs(peripheral.getNames()) do
-  local pType = peripheral.getType(name) or "?"
-  print("  " .. name .. " -> " .. pType)
-end
-
 for _, name in ipairs(peripheral.getNames()) do
   local p = peripheral.wrap(name)
   if type(p) == "table" and type(p.getLine) == "function" then
-    print("[DEBUG] Found target: " .. name .. " - dumping lines:")
-    for n = 1, 12 do
-      local ok, v = pcall(function() return p.getLine(n) end)
-      if ok and type(v) == "string" and v ~= "" then
-        print("  line[" .. n .. "] = " .. v)
-      else
-        print("  line[" .. n .. "] = (empty or error)")
-        break
-      end
-    end
     table.insert(boilers, { name = name, p = p })
   end
 end
-
-print("[DEBUG] Boilers found: " .. #boilers)
 
 -- Boiler states updated each telemetry cycle
 local boilerStates = {}
@@ -120,70 +102,72 @@ local function pct(amount, capacity)
 end
 
 -- Read boiler status from a CC:C Bridge Display Link Target block.
--- The target block wraps a Create Boiler Status Display and exposes
--- getLine(n) returning text such as:
---   "Water: 10,000 / 16,000 mB"
---   "Steam:  8,000 / 16,000 mB"
---   "Temp: 500 / 1000 C"
--- Returns a data table or nil if no boiler data was found.
+-- The boiler status display shows visual progress bars, e.g.:
+--   line 1: "BOILER STATUS: LVL9"
+--   line 2: "SIZE [$$$$$$......] "
+--   line 3: "water[$$$$$$$$$$..] "
+--   line 4: "heat [$$$$$$......] "
+-- Filled segments are '$'; bar width is 16. Percentages are derived by
+-- counting '$' chars and dividing by 16.
+local BAR_WIDTH = 16
+
 local function readFromTarget(p)
   if type(p.getLine) ~= "function" then return nil end
 
-  -- Read a line safely; returns empty string on error
   local function line(n)
     local ok, v = pcall(function() return p.getLine(n) end)
     return (ok and type(v) == "string") and v or ""
   end
 
-  -- Parse "10,000 / 16,000 mB" or "500 / 1000" → current, max
-  local function parsePair(s)
-    if not s or s == "" then return nil, nil end
-    local clean = s:gsub(",", ""):gsub("mB", ""):gsub("%s+", " ")
-    local a, b = clean:match("(%d+%.?%d*)%s*/%s*(%d+%.?%d*)")
-    if a and b then return tonumber(a), tonumber(b) end
-    return tonumber(clean:match("(%d+%.?%d*)")), nil
+  -- Count '$' chars in line and convert to 0-100 percentage
+  local function barPct(s)
+    local filled = select(2, s:gsub("%$", ""))
+    return math.min(100, math.floor(filled / BAR_WIDTH * 100))
   end
 
-  local data = {}
-  local found = false
+  -- Split lines into per-boiler sections.
+  -- A header line (contains "boiler" or "lvl") starts a new section.
+  local sections = {}
+  local cur = nil
 
-  print("[DEBUG] readFromTarget lines:")
-  for n = 1, 12 do
+  for n = 1, 16 do
     local l = line(n)
-    print("  [" .. n .. "] >>>" .. l .. "<<<")
     if l == "" then break end
     local ll = l:lower()
-    local after = l:match(":%s*(.+)") or l
-    if ll:find("water") then
-      data.waterAmount, data.waterCap = parsePair(after)
-      print("    matched water: " .. tostring(data.waterAmount) .. " / " .. tostring(data.waterCap))
-      found = true
-    elseif ll:find("steam") then
-      data.steamAmount, data.steamCap = parsePair(after)
-      print("    matched steam: " .. tostring(data.steamAmount) .. " / " .. tostring(data.steamCap))
-      found = true
-    elseif ll:find("temp") then
-      data.temp, data.maxTemp = parsePair(after)
-      print("    matched temp: " .. tostring(data.temp) .. " / " .. tostring(data.maxTemp))
-      found = true
-    else
-      print("    no keyword match")
+    if ll:find("boiler") or ll:find("lvl") then
+      if cur then table.insert(sections, cur) end
+      cur = {}
+    elseif cur then
+      if ll:find("water") then
+        cur.waterPct = barPct(l)
+      elseif ll:find("size") then
+        cur.steamPct = barPct(l)
+      elseif ll:find("heat") then
+        cur.tempPct = barPct(l)
+      end
     end
   end
+  if cur then table.insert(sections, cur) end
 
-  if not found then
-    print("[DEBUG] readFromTarget: no data found, returning nil")
-    return nil
+  if #sections == 0 then return nil end
+
+  local cap = CONFIG.capacityFallback
+  local out = {}
+  for _, d in ipairs(sections) do
+    local wPct = d.waterPct or 0
+    local sPct = d.steamPct or 0
+    local tPct = d.tempPct  or 0
+    table.insert(out, {
+      waterAmount = math.floor(wPct / 100 * cap),
+      waterCap    = cap,
+      steamAmount = math.floor(sPct / 100 * cap),
+      steamCap    = cap,
+      temp        = math.floor(tPct / 100 * 1000),
+      maxTemp     = 1000,
+    })
   end
 
-  return {
-    waterAmount = data.waterAmount or 0,
-    waterCap    = data.waterCap    or CONFIG.capacityFallback,
-    steamAmount = data.steamAmount or 0,
-    steamCap    = data.steamCap    or CONFIG.capacityFallback,
-    temp        = data.temp        or 0,
-    maxTemp     = data.maxTemp     or 1000,
-  }
+  return out
 end
 
 local function readAllBoilers()
@@ -193,43 +177,45 @@ local function readAllBoilers()
     local p = b.p
 
     -- ── CC:C Bridge Display Link Target ───────────────────────────────
-    local bridge = readFromTarget(p)
-    if not bridge then goto continue end
+    local bridgeList = readFromTarget(p)
+    if not bridgeList then goto continue end
 
-    local waterPct    = pct(bridge.waterAmount, bridge.waterCap)
-    local steamPct    = pct(bridge.steamAmount, bridge.steamCap)
-    local tempPercent = pct(bridge.temp, bridge.maxTemp)
+    for j, bridge in ipairs(bridgeList) do
+      local waterPct    = pct(bridge.waterAmount, bridge.waterCap)
+      local steamPct    = pct(bridge.steamAmount, bridge.steamCap)
+      local tempPercent = pct(bridge.temp, bridge.maxTemp)
 
-    -- ── Status classification ─────────────────────────────────────────
-    local status, alarm
+      -- ── Status classification ───────────────────────────────────────
+      local status, alarm
+      if waterPct <= CONFIG.waterLowPercent then
+        status = "WATER_LOW";  alarm = true
+      elseif steamPct >= CONFIG.steamHighPercent then
+        status = "STEAM_HIGH"; alarm = true
+      elseif tempPercent > 0 and tempPercent < CONFIG.tempWarmPercent then
+        status = "WARMING";    alarm = false
+      elseif waterPct >= CONFIG.waterHighPercent then
+        status = "WATER_FULL"; alarm = false
+      else
+        status = "RUNNING";    alarm = false
+      end
 
-    if waterPct <= CONFIG.waterLowPercent then
-      status = "WATER_LOW";  alarm = true
-    elseif steamPct >= CONFIG.steamHighPercent then
-      status = "STEAM_HIGH"; alarm = true
-    elseif tempPercent > 0 and tempPercent < CONFIG.tempWarmPercent then
-      status = "WARMING";    alarm = false
-    elseif waterPct >= CONFIG.waterHighPercent then
-      status = "WATER_FULL"; alarm = false
-    else
-      status = "RUNNING";    alarm = false
+      local nodeIdx = (i - 1) * 2 + j
+      table.insert(newStates, {
+        node        = nodeName .. "_" .. nodeIdx,
+        pName       = b.name .. "_" .. j,
+        temp        = bridge.temp,
+        maxTemp     = bridge.maxTemp,
+        tempPercent = tempPercent,
+        waterPct    = waterPct,
+        waterAmount = bridge.waterAmount,
+        waterCap    = bridge.waterCap,
+        steamPct    = steamPct,
+        steamAmount = bridge.steamAmount,
+        steamCap    = bridge.steamCap,
+        status      = status,
+        alarm       = alarm,
+      })
     end
-
-    table.insert(newStates, {
-      node        = nodeName .. "_" .. i,
-      pName       = b.name,
-      temp        = bridge.temp,
-      maxTemp     = bridge.maxTemp,
-      tempPercent = tempPercent,
-      waterPct    = waterPct,
-      waterAmount = bridge.waterAmount,
-      waterCap    = bridge.waterCap,
-      steamPct    = steamPct,
-      steamAmount = bridge.steamAmount,
-      steamCap    = bridge.steamCap,
-      status      = status,
-      alarm       = alarm,
-    })
 
     ::continue::
   end
