@@ -37,12 +37,30 @@ local _, wirelessSide = wireless.find()
 -- Expects CC:C Bridge Display Link Target blocks (expose getLine).
 local boilers = {}
 
+print("[DEBUG] All peripherals:")
+for _, name in ipairs(peripheral.getNames()) do
+  local pType = peripheral.getType(name) or "?"
+  print("  " .. name .. " -> " .. pType)
+end
+
 for _, name in ipairs(peripheral.getNames()) do
   local p = peripheral.wrap(name)
   if type(p) == "table" and type(p.getLine) == "function" then
+    print("[DEBUG] Found target: " .. name .. " - dumping lines:")
+    for n = 1, 12 do
+      local ok, v = pcall(function() return p.getLine(n) end)
+      if ok and type(v) == "string" and v ~= "" then
+        print("  line[" .. n .. "] = " .. v)
+      else
+        print("  line[" .. n .. "] = (empty or error)")
+        break
+      end
+    end
     table.insert(boilers, { name = name, p = p })
   end
 end
+
+print("[DEBUG] Boilers found: " .. #boilers)
 
 -- Boiler states updated each telemetry cycle
 local boilerStates = {}
