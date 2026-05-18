@@ -110,6 +110,55 @@ local function drawTicker(mon, heartbeat)
 end
 
 -- =========================================================
+--  Logs / alarms board (monitor 2)
+-- =========================================================
+
+local function drawLogs(mon, heartbeat)
+  clear(mon)
+  local w, h = mon.getSize()
+
+  -- Red header bar
+  paintutils.drawFilledBox(1, 1, w, 1, colors.red)
+  mon.setBackgroundColor(colors.red)
+  mon.setTextColor(colors.white)
+  mon.setCursorPos(2, 1)
+  mon.write("ALARMS & LOGS")
+  led(mon, w, 1, colors.lime, heartbeat)
+  mon.setBackgroundColor(colors.black)
+
+  local y = 2
+
+  for _, alarm in ipairs(alarms) do
+    if y > h then break end
+    mon.setCursorPos(1, y)
+    mon.setTextColor(colors.red)
+    mon.write(("! " .. alarm):sub(1, w))
+    y = y + 1
+  end
+
+  if #alarms > 0 and #logs > 0 and y <= h then
+    mon.setCursorPos(1, y)
+    mon.setTextColor(colors.gray)
+    mon.write(("-"):rep(w))
+    y = y + 1
+  end
+
+  for _, entry in ipairs(logs) do
+    if y > h then break end
+    mon.setCursorPos(1, y)
+    mon.setTextColor(colors.gray)
+    mon.write(("  " .. entry):sub(1, w))
+    y = y + 1
+  end
+
+  if y == 2 then
+    mon.setCursorPos(2, 2)
+    mon.setTextColor(colors.lime)
+    mon.write("All clear")
+  end
+end
+
+-- =========================================================
 --  Header bar
 -- =========================================================
 
@@ -329,6 +378,8 @@ local function uiLoop()
           drawTicker(mon, heartbeat)
         elseif kind == "tiny" then
           drawTiny(mon, heartbeat)
+        elseif i == 2 then
+          drawLogs(mon, heartbeat)
         else
           drawMain(mon, i, heartbeat)
         end

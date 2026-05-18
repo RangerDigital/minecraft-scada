@@ -36,9 +36,10 @@ local tankName = nil
 
 for _, name in ipairs(peripheral.getNames()) do
   local p = peripheral.wrap(name)
-  -- Support CC standard (tanks) and CC:C Bridge (getFluidInTank) fluid APIs
+  -- CC standard, CC:C Bridge, or create_target (Display Link text reader)
   if type(p.tanks) == "function"
     or type(p.getFluidInTank) == "function"
+    or (type(p.dump) == "function" and type(p.getLine) == "function")
   then
     tank = p
     tankName = name
@@ -77,9 +78,14 @@ local function drawMonitorStatus(mon, heartbeat, alarm)
   mon.setBackgroundColor(colors.black)
   mon.clear()
 
-  statusLine(mon, 2, 1, colors.lime, "HB",    heartbeat)
-  statusLine(mon, 2, 3, colors.cyan, "NET",   wirelessSide ~= nil)
-  statusLine(mon, 2, 5, colors.red,  "ALARM", alarm)
+  local _, h = mon.getSize()
+  local step = math.max(1, math.min(2, math.floor((h - 1) / 3)))
+  local top  = 2
+
+  statusLine(mon, 2, top,          colors.lime, "HB",  heartbeat)
+  statusLine(mon, 2, top + step,   colors.cyan, "NET", wirelessSide ~= nil)
+  statusLine(mon, 2, top + step*2,
+    alarm and colors.red or colors.gray, "ALARM", alarm)
 end
 
 -- =========================================================
@@ -129,6 +135,50 @@ local function readFluidPeripheral(p)
       end
     end
     if #result > 0 then return result end
+  end
+
+  -- create_target: reads text lines from a Display Link (e.g. on a Threshold Switch)
+  -- Peripheral type: "create_target", methods: dump(), getLine(y), resize(w,h)
+  if type(p.dump) == "function" and type(p.getLine) == "function" then
+    pcall(function() p.resize(20, 5) end)
+    local ok, lines = pcall(function() return p.dump() end)
+    if ok and type(lines) == "table" then
+      local percent          = nil
+      local amount, capacity = nil, nil
+      local fluidName        = "unknown"
+
+      for _, line in ipairs(lines) do
+        if type(line) == "string" then
+          -- "1000 / 16000 mB" pattern for absolute amounts
+          local a, c = line:match("(%d+)%s*/%s*(%d+)%s*m[Bb]")
+          if a and c then
+            amount = tonumber(a); capacity = tonumber(c)
+          end
+          -- "25%" pattern for percentage-only sources
+          local pct = line:match("(%d+)%s*%%")
+          if pct then percent = tonumber(pct) end
+          -- fluid name: alphabetic, no digits or special chars, not UI labels
+          local trimmed = line:match("^%s*(.-)%s*$")
+          if trimmed ~= ""
+            and trimmed:match("^[A-Za-z]")
+            and not trimmed:match("[:/%%]")
+            and not trimmed:match("%d")
+            and not trimmed:lower():match("threshold")
+            and not trimmed:lower():match("switch")
+            and not trimmed:lower():match("signal")
+            and not trimmed:lower():match("active")
+          then
+            fluidName = trimmed
+          end
+        end
+      end
+
+      if amount and capacity then
+        return {{ name = fluidName, amount = amount, capacity = capacity }}
+      elseif percent then
+        return {{ name = fluidName, amount = percent, capacity = 100 }}
+      end
+    end
   end
 
   return nil
@@ -308,11 +358,7 @@ local function uiLoop()
 
     for _, mon in ipairs(monitors) do
       pcall(function()
-        local w, h = mon.getSize()
-
-        if w <= 12 and h <= 8 then
-          drawMonitorStatus(mon, heartbeat, state.alarm)
-        end
+        drawMonitorStatus(mon, heartbeat, state.alarm)
       end)
     end
 
