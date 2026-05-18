@@ -1,12 +1,13 @@
 -- =========================================================
---  Factory OS Storage Node
+--  Factory OS Storage Node v1.3
 -- =========================================================
 
 local CONFIG = {
   address = "Trash",
   refreshRate = 2,
   requestCooldown = 3,
-  maxBatch = 1000
+  maxBatch = 1000,
+  telemetryRate = 2
 }
 
 -- =========================================================
@@ -20,6 +21,18 @@ local function reset()
 
   term.clear()
   term.setCursorPos(1,1)
+end
+
+local function led(color, text)
+
+  term.setBackgroundColor(color)
+  write(" ")
+
+  term.setBackgroundColor(colors.black)
+  write(" ")
+
+  term.setTextColor(colors.lightGray)
+  print(text)
 end
 
 -- =========================================================
@@ -67,6 +80,8 @@ local policies = {}
 
 local latestExport = "none"
 
+local stockMap = {}
+
 -- =========================================================
 --  Policies
 -- =========================================================
@@ -107,8 +122,6 @@ loadPolicies()
 -- =========================================================
 --  Stock
 -- =========================================================
-
-local stockMap = {}
 
 local function updateStock()
 
@@ -158,23 +171,23 @@ local function drawStatus()
 
   term.setTextColor(colors.orange)
 
-  print("================================")
-  print("      FACTORY OS STORAGE")
-  print("================================")
-
-  term.setTextColor(colors.cyan)
+  print("Factory OS Storage Node v1.3")
 
   print("")
-  print("Overflow Management")
+
+  led(colors.lime, "Heartbeat")
+  led(colors.cyan, "Wireless")
+  led(colors.orange, "Overflow Export")
+
+  print("")
+
+  term.setTextColor(colors.white)
+  print("Latest Export:")
 
   term.setTextColor(colors.lightGray)
-
-  print("")
-  print("Latest export:")
   print(latestExport)
 
   print("")
-  print("--------------------------------")
 
   local sorted = {}
 
@@ -183,8 +196,6 @@ local function drawStatus()
   end
 
   table.sort(sorted)
-
-  local y = 10
 
   for _, item in ipairs(sorted) do
 
@@ -196,8 +207,6 @@ local function drawStatus()
     local overflow =
       current - cfg.limit
 
-    term.setCursorPos(1,y)
-
     local short =
       item:gsub("minecraft:", "")
       :sub(1,12)
@@ -206,7 +215,7 @@ local function drawStatus()
 
       term.setTextColor(colors.red)
 
-      write(string.format(
+      print(string.format(
         "%-12s %5d/%-5d +%d",
         short,
         current,
@@ -218,22 +227,20 @@ local function drawStatus()
 
       term.setTextColor(colors.lime)
 
-      write(string.format(
+      print(string.format(
         "%-12s %5d/%-5d",
         short,
         current,
         cfg.limit
       ))
     end
-
-    y = y + 1
   end
-
-  term.setTextColor(colors.gray)
 
   local w,h = term.getSize()
 
   term.setCursorPos(1,h)
+
+  term.setTextColor(colors.gray)
 
   write("Place item on depot to edit")
 end
@@ -256,13 +263,12 @@ local function configLoop()
 
       term.setTextColor(colors.orange)
 
-      print("================================")
-      print("      FACTORY OS STORAGE")
-      print("================================")
+      print("Factory OS Storage Node v1.3")
+
+      print("")
 
       term.setTextColor(colors.cyan)
 
-      print("")
       print(item)
 
       local current =
@@ -270,9 +276,10 @@ local function configLoop()
         and policies[item].limit
         or 0
 
+      print("")
+
       term.setTextColor(colors.lightGray)
 
-      print("")
       print("Current limit: " .. current)
 
       print("")
@@ -297,23 +304,6 @@ local function configLoop()
 
         print("")
         print("Saved.")
-
-        if modem then
-
-          rednet.broadcast({
-
-            type = "storage_policy",
-
-            node =
-              os.getComputerLabel()
-              or tostring(os.getComputerID()),
-
-            item = item,
-
-            limit = limit
-
-          }, "factoryos")
-        end
 
       else
 
@@ -393,27 +383,6 @@ local function exportLoop()
             amount
             .. " "
             .. selectedItem
-
-          if modem then
-
-            rednet.broadcast({
-
-              type = "storage_update",
-
-              node =
-                os.getComputerLabel()
-                or tostring(os.getComputerID()),
-
-              item = selectedItem,
-
-              amount = amount,
-
-              overflow = biggestOverflow,
-
-              stock = stockMap
-
-            }, "factoryos")
-          end
         end
       end
     end
@@ -423,7 +392,58 @@ local function exportLoop()
 end
 
 -- =========================================================
---  UI Loop
+--  Telemetry
+-- =========================================================
+
+local function telemetryLoop()
+
+  while true do
+
+    if modem then
+
+      local items = {}
+
+      for item, cfg in pairs(policies) do
+
+        local current =
+          stockMap[item] or 0
+
+        local overflow =
+          current - cfg.limit
+
+        table.insert(items, {
+
+          item = item,
+
+          current = current,
+
+          limit = cfg.limit,
+
+          overflow = overflow
+        })
+      end
+
+      rednet.broadcast({
+
+        type = "storage_status",
+
+        node =
+          os.getComputerLabel()
+          or tostring(os.getComputerID()),
+
+        latestExport = latestExport,
+
+        items = items
+
+      }, "factoryos")
+    end
+
+    sleep(CONFIG.telemetryRate)
+  end
+end
+
+-- =========================================================
+--  UI
 -- =========================================================
 
 local function uiLoop()
@@ -441,5 +461,6 @@ end
 parallel.waitForAny(
   configLoop,
   exportLoop,
+  telemetryLoop,
   uiLoop
 )

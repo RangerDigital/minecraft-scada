@@ -1,5 +1,5 @@
 -- =========================================================
---  Factory OS SCADA
+--  Factory OS SCADA v1.3
 -- =========================================================
 
 local monitors = {
@@ -23,10 +23,9 @@ if modem then
 end
 
 local latest = {
-  item = "none",
-  amount = 0,
-  overflow = 0,
-  node = "none"
+  node = "none",
+  latestExport = "none",
+  items = {}
 }
 
 -- =========================================================
@@ -67,6 +66,17 @@ local function led(mon,x,y,color,on)
   mon.setBackgroundColor(colors.black)
 end
 
+local function statusLine(mon,y,color,text,on)
+
+  led(mon,3,y,color,on)
+
+  mon.setCursorPos(5,y)
+
+  mon.setTextColor(colors.lightGray)
+
+  mon.write(text)
+end
+
 -- =========================================================
 --  Configure
 -- =========================================================
@@ -89,22 +99,39 @@ local function drawMain(mon, heartbeat)
   local w,h = mon.getSize()
 
   paintutils.drawFilledBox(
-    1,1,w,3,
+    1,1,w,2,
     colors.orange
   )
 
   center(
     mon,
-    2,
-    "FACTORY OS",
+    1,
+    "Factory OS SCADA v1.3",
     colors.black
   )
 
-  center(
+  statusLine(
+    mon,
+    4,
+    colors.lime,
+    "Heartbeat",
+    heartbeat
+  )
+
+  statusLine(
+    mon,
+    5,
+    colors.cyan,
+    "Wireless",
+    modem ~= nil
+  )
+
+  statusLine(
     mon,
     6,
-    "STORAGE NETWORK",
-    colors.cyan
+    colors.orange,
+    "Storage Network",
+    true
   )
 
   mon.setTextColor(colors.white)
@@ -118,45 +145,59 @@ local function drawMain(mon, heartbeat)
   mon.setCursorPos(3,11)
 
   mon.setTextColor(colors.white)
-  mon.write("Item:")
+  mon.write("Latest Export:")
 
   mon.setTextColor(colors.orange)
-  mon.write(" " .. latest.item)
 
-  mon.setCursorPos(3,13)
+  mon.setCursorPos(3,12)
+  mon.write(latest.latestExport)
 
-  mon.setTextColor(colors.white)
-  mon.write("Export:")
-
-  mon.setTextColor(colors.lime)
-  mon.write(" " .. latest.amount)
+  mon.setTextColor(colors.cyan)
 
   mon.setCursorPos(3,15)
+  mon.write("Monitored Items")
 
-  mon.setTextColor(colors.white)
-  mon.write("Overflow:")
+  local y = 17
 
-  mon.setTextColor(colors.red)
-  mon.write(" +" .. latest.overflow)
+  for _, item in ipairs(latest.items) do
 
-  -- status
+    mon.setCursorPos(3,y)
 
-  mon.setTextColor(colors.lightGray)
+    local short =
+      item.item
+      :gsub("minecraft:", "")
+      :sub(1,12)
 
-  mon.setCursorPos(3,19)
-  mon.write("Heartbeat")
+    if item.overflow > 0 then
 
-  led(mon,16,19,colors.lime,heartbeat)
+      mon.setTextColor(colors.red)
 
-  mon.setCursorPos(3,21)
-  mon.write("Wireless")
+      mon.write(string.format(
+        "%-12s %5d/%-5d +%d",
+        short,
+        item.current,
+        item.limit,
+        item.overflow
+      ))
 
-  led(mon,16,21,colors.cyan,modem)
+    else
 
-  mon.setCursorPos(3,23)
-  mon.write("Storage")
+      mon.setTextColor(colors.lime)
 
-  led(mon,16,23,colors.orange,true)
+      mon.write(string.format(
+        "%-12s %5d/%-5d",
+        short,
+        item.current,
+        item.limit
+      ))
+    end
+
+    y = y + 1
+
+    if y > h then
+      break
+    end
+  end
 end
 
 -- =========================================================
@@ -167,28 +208,29 @@ local function drawTiny(mon, heartbeat)
 
   clear(mon)
 
-  local w,h = mon.getSize()
-
-  paintutils.drawFilledBox(
-    1,1,w,h,
-    colors.black
+  statusLine(
+    mon,
+    2,
+    colors.lime,
+    "HB",
+    heartbeat
   )
 
-  mon.setCursorPos(2,2)
-  mon.setTextColor(colors.lightGray)
-  mon.write("HB")
+  statusLine(
+    mon,
+    4,
+    colors.cyan,
+    "NET",
+    modem ~= nil
+  )
 
-  led(mon,5,2,colors.lime,heartbeat)
-
-  mon.setCursorPos(2,4)
-  mon.write("NET")
-
-  led(mon,6,4,colors.cyan,modem)
-
-  mon.setCursorPos(2,6)
-  mon.write("STR")
-
-  led(mon,6,6,colors.orange,true)
+  statusLine(
+    mon,
+    6,
+    colors.orange,
+    "STR",
+    true
+  )
 end
 
 -- =========================================================
@@ -204,7 +246,7 @@ local function networkLoop()
 
     if type(msg) == "table" then
 
-      if msg.type == "storage_update" then
+      if msg.type == "storage_status" then
 
         latest = msg
       end
