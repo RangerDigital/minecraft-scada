@@ -1,32 +1,35 @@
 -- =========================================================
---  Factory OS SCADA v1.4
+--  Factory OS SCADA v1.5
 -- =========================================================
 
 local monitors = {
   peripheral.find("monitor")
 }
 
-local modem = peripheral.find(
-  "modem",
-  function(_, m)
+local modemName = nil
+
+for _, name in ipairs(peripheral.getNames()) do
+
+  if peripheral.getType(name) == "modem" then
+
+    local modem = peripheral.wrap(name)
 
     local ok, wireless = pcall(function()
-      return m.isWireless()
+      return modem.isWireless()
     end)
 
-    return ok and wireless
+    if ok and wireless then
+      modemName = name
+      break
+    end
   end
-)
-
-if modem then
-  rednet.open(peripheral.getName(modem))
 end
 
-local latest = {
-  node = "none",
-  latestExport = "none",
-  items = {}
-}
+if modemName then
+  rednet.open(modemName)
+end
+
+local nodes = {}
 
 -- =========================================================
 --  Helpers
@@ -95,34 +98,48 @@ for _, mon in ipairs(monitors) do
 end
 
 -- =========================================================
---  Main Display
+--  Main
 -- =========================================================
 
-local function drawMain(mon, heartbeat)
+local function drawMain(mon, heartbeat, id)
 
   clear(mon)
 
   local w,h = mon.getSize()
-
-  -- Header
 
   paintutils.drawFilledBox(
     1,1,w,2,
     colors.orange
   )
 
-  center(
-    mon,
-    1,
-    "Factory OS SCADA v1.4",
-    colors.black
+  mon.setTextColor(colors.black)
+
+  mon.setCursorPos(2,1)
+  mon.write("Factory OS SCADA")
+
+  local info =
+    "#" .. id ..
+    "  " ..
+    w .. "x" .. h
+
+  mon.setCursorPos(
+    w - #info - 4,
+    1
   )
 
-  -- Status
+  mon.write(info)
+
+  led(
+    mon,
+    w - 1,
+    1,
+    colors.lime,
+    heartbeat
+  )
 
   statusLine(
     mon,
-    5,
+    4,
     colors.lime,
     "Heartbeat",
     heartbeat
@@ -130,88 +147,98 @@ local function drawMain(mon, heartbeat)
 
   statusLine(
     mon,
-    7,
+    6,
     colors.cyan,
     "Wireless",
-    modem ~= nil
+    modemName ~= nil
   )
 
   statusLine(
     mon,
-    9,
+    8,
     colors.orange,
-    "Storage Network",
+    "Discovery",
     true
   )
 
-  -- Node
+  mon.setTextColor(colors.cyan)
 
-  mon.setTextColor(colors.white)
+  mon.setCursorPos(3,11)
+  mon.write("Network Nodes")
 
-  mon.setCursorPos(3,12)
-  mon.write("Node:")
+  local y = 13
 
-  mon.setTextColor(colors.lightGray)
-  mon.write(" " .. latest.node)
+  for name, node in pairs(nodes) do
 
-  -- Export
+    local alive =
+      (os.clock() - node.lastSeen) < 6
 
-  mon.setCursorPos(3,14)
+    led(
+      mon,
+      3,
+      y,
+      alive and colors.lime or colors.red,
+      true
+    )
 
-  mon.setTextColor(colors.white)
-  mon.write("Latest Export:")
+    mon.setCursorPos(5,y)
 
-  mon.setCursorPos(3,15)
+    mon.setTextColor(colors.white)
 
-  mon.setTextColor(colors.orange)
-  mon.write(latest.latestExport)
+    mon.write(name)
 
-  -- Items
+    y = y + 2
+  end
+
+  y = y + 1
 
   mon.setTextColor(colors.cyan)
 
-  mon.setCursorPos(3,18)
-  mon.write("Monitored Items")
+  mon.setCursorPos(3,y)
+  mon.write("Storage Status")
 
-  local y = 20
+  y = y + 2
 
-  for _, item in ipairs(latest.items) do
+  for _, node in pairs(nodes) do
 
-    mon.setCursorPos(3,y)
+    for _, item in ipairs(node.items or {}) do
 
-    local short =
-      item.item
-      :gsub("minecraft:", "")
-      :sub(1,12)
+      local short =
+        item.item
+        :gsub("minecraft:", "")
+        :sub(1,12)
 
-    if item.overflow > 0 then
+      mon.setCursorPos(3,y)
 
-      mon.setTextColor(colors.red)
+      if item.overflow > 0 then
 
-      mon.write(string.format(
-        "%-12s %5d/%-5d +%d",
-        short,
-        item.current,
-        item.limit,
-        item.overflow
-      ))
+        mon.setTextColor(colors.red)
 
-    else
+        mon.write(string.format(
+          "%-12s %5d/%-5d +%d",
+          short,
+          item.current,
+          item.limit,
+          item.overflow
+        ))
 
-      mon.setTextColor(colors.lime)
+      else
 
-      mon.write(string.format(
-        "%-12s %5d/%-5d",
-        short,
-        item.current,
-        item.limit
-      ))
-    end
+        mon.setTextColor(colors.lime)
 
-    y = y + 1
+        mon.write(string.format(
+          "%-12s %5d/%-5d",
+          short,
+          item.current,
+          item.limit
+        ))
+      end
 
-    if y > h then
-      break
+      y = y + 1
+
+      if y > h then
+        return
+      end
     end
   end
 end
@@ -220,15 +247,28 @@ end
 --  Tiny Monitor
 -- =========================================================
 
-local function drawTiny(mon, heartbeat)
+local function drawTiny(mon, heartbeat, id)
 
   clear(mon)
 
-  center(
-    mon,
-    1,
-    "Factory OS",
+  local w,h = mon.getSize()
+
+  paintutils.drawFilledBox(
+    1,1,w,2,
     colors.orange
+  )
+
+  mon.setTextColor(colors.black)
+
+  mon.setCursorPos(2,1)
+  mon.write("#" .. id)
+
+  led(
+    mon,
+    w - 1,
+    1,
+    colors.lime,
+    heartbeat
   )
 
   statusLine(
@@ -244,14 +284,20 @@ local function drawTiny(mon, heartbeat)
     5,
     colors.cyan,
     "NET",
-    modem ~= nil
+    modemName ~= nil
   )
+
+  local nodeCount = 0
+
+  for _ in pairs(nodes) do
+    nodeCount = nodeCount + 1
+  end
 
   statusLine(
     mon,
     7,
     colors.orange,
-    "STR",
+    tostring(nodeCount),
     true
   )
 end
@@ -271,7 +317,14 @@ local function networkLoop()
 
       if msg.type == "storage_status" then
 
-        latest = msg
+        nodes[msg.node] = {
+
+          lastSeen = os.clock(),
+
+          items = msg.items,
+
+          latestExport = msg.latestExport
+        }
       end
     end
   end
@@ -294,9 +347,9 @@ local function uiLoop()
       pcall(function()
 
         if i == 4 then
-          drawTiny(mon, heartbeat)
+          drawTiny(mon, heartbeat, i)
         else
-          drawMain(mon, heartbeat)
+          drawMain(mon, heartbeat, i)
         end
 
       end)

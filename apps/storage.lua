@@ -1,5 +1,5 @@
 -- =========================================================
---  Factory OS Storage Node v1.3
+--  Factory OS Storage Node v1.5
 -- =========================================================
 
 local CONFIG = {
@@ -42,17 +42,28 @@ end
 local stock = peripheral.find("Create_StockTicker")
 local depot = peripheral.find("create:depot")
 
-local modem = peripheral.find(
-  "modem",
-  function(_, m)
+local modemName = nil
+
+for _, name in ipairs(peripheral.getNames()) do
+
+  if peripheral.getType(name) == "modem" then
+
+    local modem = peripheral.wrap(name)
 
     local ok, wireless = pcall(function()
-      return m.isWireless()
+      return modem.isWireless()
     end)
 
-    return ok and wireless
+    if ok and wireless then
+      modemName = name
+      break
+    end
   end
-)
+end
+
+if modemName then
+  rednet.open(modemName)
+end
 
 if not stock then
   error("No Stock Ticker")
@@ -60,10 +71,6 @@ end
 
 if not depot then
   error("No Depot")
-end
-
-if modem then
-  rednet.open(peripheral.getName(modem))
 end
 
 -- =========================================================
@@ -81,6 +88,10 @@ local policies = {}
 local latestExport = "none"
 
 local stockMap = {}
+
+local nodeName =
+  os.getComputerLabel()
+  or ("storage_" .. os.getComputerID())
 
 -- =========================================================
 --  Policies
@@ -162,6 +173,58 @@ local function getDepotItem()
 end
 
 -- =========================================================
+--  Telemetry
+-- =========================================================
+
+local function buildItems()
+
+  local items = {}
+
+  for item, cfg in pairs(policies) do
+
+    local current =
+      stockMap[item] or 0
+
+    local overflow =
+      current - cfg.limit
+
+    table.insert(items, {
+
+      item = item,
+
+      current = current,
+
+      limit = cfg.limit,
+
+      overflow = overflow
+    })
+  end
+
+  return items
+end
+
+local function broadcastStatus()
+
+  if not modemName then
+    return
+  end
+
+  rednet.broadcast({
+
+    type = "storage_status",
+
+    node = nodeName,
+
+    latestExport = latestExport,
+
+    items = buildItems(),
+
+    heartbeat = os.clock()
+
+  }, "factoryos")
+end
+
+-- =========================================================
 --  Status UI
 -- =========================================================
 
@@ -171,7 +234,7 @@ local function drawStatus()
 
   term.setTextColor(colors.orange)
 
-  print("Factory OS Storage Node v1.3")
+  print("Factory OS Storage Node v1.5")
 
   print("")
 
@@ -235,18 +298,10 @@ local function drawStatus()
       ))
     end
   end
-
-  local w,h = term.getSize()
-
-  term.setCursorPos(1,h)
-
-  term.setTextColor(colors.gray)
-
-  write("Place item on depot to edit")
 end
 
 -- =========================================================
---  Config UI
+--  Config
 -- =========================================================
 
 local lastDepotItem = nil
@@ -263,7 +318,7 @@ local function configLoop()
 
       term.setTextColor(colors.orange)
 
-      print("Factory OS Storage Node v1.3")
+      print("Factory OS Storage Node v1.5")
 
       print("")
 
@@ -300,20 +355,10 @@ local function configLoop()
 
         savePolicies()
 
-        term.setTextColor(colors.lime)
-
-        print("")
-        print("Saved.")
-
-      else
-
-        term.setTextColor(colors.red)
-
-        print("")
-        print("Invalid number")
+        broadcastStatus()
       end
 
-      sleep(2)
+      sleep(1)
     end
 
     lastDepotItem = item
@@ -323,7 +368,7 @@ local function configLoop()
 end
 
 -- =========================================================
---  Export Loop
+--  Export
 -- =========================================================
 
 local lastRequest = -999
@@ -377,12 +422,14 @@ local function exportLoop()
 
         if ok then
 
-          lastRequest = os.clock()
-
           latestExport =
             amount
             .. " "
             .. selectedItem
+
+          lastRequest = os.clock()
+
+          broadcastStatus()
         end
       end
     end
@@ -392,51 +439,14 @@ local function exportLoop()
 end
 
 -- =========================================================
---  Telemetry
+--  Heartbeat Telemetry
 -- =========================================================
 
 local function telemetryLoop()
 
   while true do
 
-    if modem then
-
-      local items = {}
-
-      for item, cfg in pairs(policies) do
-
-        local current =
-          stockMap[item] or 0
-
-        local overflow =
-          current - cfg.limit
-
-        table.insert(items, {
-
-          item = item,
-
-          current = current,
-
-          limit = cfg.limit,
-
-          overflow = overflow
-        })
-      end
-
-      rednet.broadcast({
-
-        type = "storage_status",
-
-        node =
-          os.getComputerLabel()
-          or tostring(os.getComputerID()),
-
-        latestExport = latestExport,
-
-        items = items
-
-      }, "factoryos")
-    end
+    broadcastStatus()
 
     sleep(CONFIG.telemetryRate)
   end
