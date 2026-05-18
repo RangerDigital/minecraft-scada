@@ -62,9 +62,9 @@ Selected app stored in:
 Example:
 
 hello
+supervisor
 storage
 trains
-boiler
 
 ---
 
@@ -330,7 +330,7 @@ Allows:
 
 # Current Apps
 
-## hello.lua
+## supervisor.lua
 
 SCADA / telemetry dashboard
 

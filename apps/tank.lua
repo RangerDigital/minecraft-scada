@@ -25,6 +25,9 @@ local nodeName =
   or os.getComputerLabel()
   or ("tank_" .. os.getComputerID())
 
+local nodeLabel = util.readFile("/config/node_label.txt") or nodeName
+local nodeGroup = util.readFile("/config/node_group.txt") or ""
+
 -- =========================================================
 --  Peripheral discovery
 -- =========================================================
@@ -202,6 +205,8 @@ local function broadcastStatus()
       percent   = s.percent,
       level     = s.level,
       alarm     = s.alarm,
+      label     = nodeLabel,
+      group     = nodeGroup,
       heartbeat = os.epoch("utc"),
     }, PROTOCOL)
 

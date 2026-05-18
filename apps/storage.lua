@@ -16,6 +16,7 @@ local CONFIG = {
 
 local wireless = dofile("/lib/wireless.lua")
 local ui       = dofile("/lib/ui.lua")
+local util     = dofile("/lib/util.lua")
 
 local reset = ui.resetTerm
 local led   = ui.ledTerm
@@ -60,6 +61,9 @@ local stockMap = {}
 local nodeName =
   os.getComputerLabel()
   or ("storage_" .. os.getComputerID())
+
+local nodeLabel = util.readFile("/config/node_label.txt") or nodeName
+local nodeGroup = util.readFile("/config/node_group.txt") or ""
 
 -- =========================================================
 --  Policies
@@ -182,6 +186,10 @@ local function broadcastStatus()
     type = "storage_status",
 
     node = nodeName,
+
+    label = nodeLabel,
+
+    group = nodeGroup,
 
     latestExport = latestExport,
 

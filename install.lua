@@ -24,7 +24,7 @@ print("")
 term.setTextColor(colors.cyan)
 
 print("Examples:")
-print("- hello")
+print("- supervisor")
 print("- scada")
 print("- storage")
 

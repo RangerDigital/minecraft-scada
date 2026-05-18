@@ -1,5 +1,5 @@
 -- =========================================================
---  Factory OS SCADA Monitor v2.0
+--  Factory OS Supervisor v2.0
 -- =========================================================
 
 local PROTOCOL = "factoryos"
