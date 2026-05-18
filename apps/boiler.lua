@@ -34,24 +34,13 @@ local nodeName =
 local _, wirelessSide = wireless.find()
 
 -- Discover boiler peripherals on the wired network.
--- Accepts:
---   create:fluid_tank   – Create fluid reservoir (lava supply)
---   any type with "boiler" in the name – CC:C Bridge boiler status target
---   getTemperature()    – generic fallback (boiler valve)
---   getWaterAmount()    – CC:C Bridge boiler target fallback
+-- Expects CC:C Bridge Display Link Target blocks (expose getLine).
 local boilers = {}
 
 for _, name in ipairs(peripheral.getNames()) do
-  local pType = peripheral.getType(name)
-  local p     = peripheral.wrap(name)
-  if type(p) == "table" then
-    local isFluidTank  = pType and pType:find("fluid_tank")    ~= nil
-    local isBoilerType = pType and pType:lower():find("boiler") ~= nil
-    local hasTemp      = type(p.getTemperature)  == "function"
-    local hasBridge    = type(p.getWaterAmount)  == "function"
-    if isFluidTank or isBoilerType or hasTemp or hasBridge then
-      table.insert(boilers, { name = name, p = p })
-    end
+  local p = peripheral.wrap(name)
+  if type(p) == "table" and type(p.getLine) == "function" then
+    table.insert(boilers, { name = name, p = p })
   end
 end
 
@@ -106,66 +95,66 @@ end
 --  Boiler reading helpers
 -- =========================================================
 
--- Read one fluid slot (0-based) from a peripheral.
--- Returns { name, amount, capacity } or nil.
-local function readTankSlot(p, index)
-  if type(p.getFluidInTank) ~= "function" then return nil end
-
-  local fOk, fluid = pcall(function() return p.getFluidInTank(index) end)
-  if not fOk or type(fluid) ~= "table" then return nil end
-
-  local cap = CONFIG.capacityFallback
-  if type(p.getTankCapacity) == "function" then
-    local cOk, c = pcall(function() return p.getTankCapacity(index) end)
-    if cOk and type(c) == "number" and c > 0 then cap = c end
-  end
-
-  return {
-    name     = fluid.fluidType or fluid.name or "unknown",
-    amount   = fluid.amount or 0,
-    capacity = cap,
-  }
-end
-
 -- Percentage helper (0-100, integer)
 local function pct(amount, capacity)
   if capacity <= 0 then return 0 end
   return math.floor((amount / capacity) * 100)
 end
 
--- Try to read boiler data from a CC:C Bridge boiler status target.
--- Probes the direct getWaterAmount / getSteamAmount / getTemperature methods
--- that CC:C Bridge exposes when the target block is a Create steam boiler.
--- Returns a data table if the peripheral supports it, otherwise nil.
-local function readFromCCBridge(p)
-  if type(p.getWaterAmount) ~= "function" then return nil end
+-- Read boiler status from a CC:C Bridge Display Link Target block.
+-- The target block wraps a Create Boiler Status Display and exposes
+-- getLine(n) returning text such as:
+--   "Water: 10,000 / 16,000 mB"
+--   "Steam:  8,000 / 16,000 mB"
+--   "Temp: 500 / 1000 C"
+-- Returns a data table or nil if no boiler data was found.
+local function readFromTarget(p)
+  if type(p.getLine) ~= "function" then return nil end
 
-  local function safe(method, fallback)
-    if type(p[method]) ~= "function" then return fallback end
-    local ok, v = pcall(function() return p[method]() end)
-    return (ok and type(v) == "number") and v or fallback
+  -- Read a line safely; returns empty string on error
+  local function line(n)
+    local ok, v = pcall(function() return p.getLine(n) end)
+    return (ok and type(v) == "string") and v or ""
   end
 
-  local waterAmount = safe("getWaterAmount",    0)
-  local waterCap    = safe("getWaterCapacity",  0)
-  -- some CC:C Bridge versions use getMaxWaterAmount instead
-  if waterCap == 0 then waterCap = safe("getMaxWaterAmount", CONFIG.capacityFallback) end
+  -- Parse "10,000 / 16,000 mB" or "500 / 1000" → current, max
+  local function parsePair(s)
+    if not s or s == "" then return nil, nil end
+    local clean = s:gsub(",", ""):gsub("mB", ""):gsub("%s+", " ")
+    local a, b = clean:match("(%d+%.?%d*)%s*/%s*(%d+%.?%d*)")
+    if a and b then return tonumber(a), tonumber(b) end
+    return tonumber(clean:match("(%d+%.?%d*)")), nil
+  end
 
-  local steamAmount = safe("getSteamAmount",    0)
-  local steamCap    = safe("getSteamCapacity",  0)
-  if steamCap == 0 then steamCap = safe("getMaxSteamAmount", CONFIG.capacityFallback) end
+  local data = {}
+  local found = false
 
-  local temp    = safe("getTemperature",    0)
-  local maxTemp = safe("getMaxTemperature", 0)
-  if maxTemp == 0 then maxTemp = 1000 end
+  for n = 1, 12 do
+    local l = line(n)
+    if l == "" then break end
+    local ll = l:lower()
+    local after = l:match(":%s*(.+)") or l
+    if ll:find("water") then
+      data.waterAmount, data.waterCap = parsePair(after)
+      found = true
+    elseif ll:find("steam") then
+      data.steamAmount, data.steamCap = parsePair(after)
+      found = true
+    elseif ll:find("temp") then
+      data.temp, data.maxTemp = parsePair(after)
+      found = true
+    end
+  end
+
+  if not found then return nil end
 
   return {
-    waterAmount = waterAmount,
-    waterCap    = waterCap,
-    steamAmount = steamAmount,
-    steamCap    = steamCap,
-    temp        = temp,
-    maxTemp     = maxTemp,
+    waterAmount = data.waterAmount or 0,
+    waterCap    = data.waterCap    or CONFIG.capacityFallback,
+    steamAmount = data.steamAmount or 0,
+    steamCap    = data.steamCap    or CONFIG.capacityFallback,
+    temp        = data.temp        or 0,
+    maxTemp     = data.maxTemp     or 1000,
   }
 end
 
@@ -175,100 +164,24 @@ local function readAllBoilers()
   for i, b in ipairs(boilers) do
     local p = b.p
 
-    -- ── Try CC:C Bridge boiler target first ──────────────────────────
-    local bridge = readFromCCBridge(p)
+    -- ── CC:C Bridge Display Link Target ───────────────────────────────
+    local bridge = readFromTarget(p)
+    if not bridge then goto continue end
 
-    local temp, maxTemp, tempPercent
-    local hasWater, hasLava
-    local waterAmount, waterCap, waterPct
-    local steamAmount, steamCap, steamPct
-    local lavaAmount,  lavaCap,  lavaPct
-
-    if bridge then
-      -- CC:C Bridge gives us proper water + steam + temperature directly
-      temp        = bridge.temp
-      maxTemp     = bridge.maxTemp
-      waterAmount = bridge.waterAmount
-      waterCap    = bridge.waterCap
-      steamAmount = bridge.steamAmount
-      steamCap    = bridge.steamCap
-      lavaAmount, lavaCap = 0, CONFIG.capacityFallback
-      hasWater = waterCap > 0
-      hasLava  = false
-      waterPct = pct(waterAmount, waterCap)
-      steamPct = pct(steamAmount, steamCap)
-      lavaPct  = 0
-    else
-      -- ── Fall back: classify fluid slots by name ───────────────────
-      local allSlots = {}
-      if type(p.getFluidInTank) == "function" then
-        local count = 1
-        if type(p.getTankCount) == "function" then
-          local ok, n = pcall(function() return p.getTankCount() end)
-          if ok and type(n) == "number" and n > 0 then count = n end
-        end
-        for idx = 0, count - 1 do
-          local slot = readTankSlot(p, idx)
-          if slot then table.insert(allSlots, slot) end
-        end
-      end
-
-      local waterSlot, steamSlot, lavaSlot
-      for _, slot in ipairs(allSlots) do
-        local nm = (slot.name or ""):lower()
-        if     not waterSlot and nm:find("water") then waterSlot = slot
-        elseif not steamSlot and nm:find("steam") then steamSlot = slot
-        elseif not lavaSlot  and nm:find("lava")  then lavaSlot  = slot
-        end
-      end
-
-      -- Temperature via peripheral method
-      temp    = 0
-      maxTemp = 1000
-      if type(p.getTemperature) == "function" then
-        local ok, t = pcall(function() return p.getTemperature() end)
-        if ok and type(t) == "number" then temp = t end
-      end
-      if type(p.getMaxTemperature) == "function" then
-        local ok, m = pcall(function() return p.getMaxTemperature() end)
-        if ok and type(m) == "number" and m > 0 then maxTemp = m end
-      end
-
-      hasWater    = waterSlot ~= nil
-      hasLava     = lavaSlot  ~= nil
-      waterAmount = waterSlot and waterSlot.amount   or 0
-      waterCap    = waterSlot and waterSlot.capacity or CONFIG.capacityFallback
-      steamAmount = steamSlot and steamSlot.amount   or 0
-      steamCap    = steamSlot and steamSlot.capacity or CONFIG.capacityFallback
-      lavaAmount  = lavaSlot  and lavaSlot.amount    or 0
-      lavaCap     = lavaSlot  and lavaSlot.capacity  or CONFIG.capacityFallback
-      waterPct    = pct(waterAmount, waterCap)
-      steamPct    = pct(steamAmount, steamCap)
-      lavaPct     = pct(lavaAmount,  lavaCap)
-    end
-
-    tempPercent = pct(temp, maxTemp)
-
-    -- ── Heat level (optional) ─────────────────────────────────────────
-    local heatLevel
-    if type(p.getHeatLevel) == "function" then
-      local ok, h = pcall(function() return p.getHeatLevel() end)
-      if ok and type(h) == "number" then heatLevel = h end
-    end
+    local waterPct    = pct(bridge.waterAmount, bridge.waterCap)
+    local steamPct    = pct(bridge.steamAmount, bridge.steamCap)
+    local tempPercent = pct(bridge.temp, bridge.maxTemp)
 
     -- ── Status classification ─────────────────────────────────────────
-    -- Only raise fluid alarms for fluids that are actually present.
     local status, alarm
 
-    if hasLava and not hasWater and lavaPct <= CONFIG.waterLowPercent then
-      status = "LAVA_LOW";   alarm = true
-    elseif hasWater and waterPct <= CONFIG.waterLowPercent then
+    if waterPct <= CONFIG.waterLowPercent then
       status = "WATER_LOW";  alarm = true
     elseif steamPct >= CONFIG.steamHighPercent then
       status = "STEAM_HIGH"; alarm = true
     elseif tempPercent > 0 and tempPercent < CONFIG.tempWarmPercent then
       status = "WARMING";    alarm = false
-    elseif hasWater and waterPct >= CONFIG.waterHighPercent then
+    elseif waterPct >= CONFIG.waterHighPercent then
       status = "WATER_FULL"; alarm = false
     else
       status = "RUNNING";    alarm = false
@@ -277,24 +190,20 @@ local function readAllBoilers()
     table.insert(newStates, {
       node        = nodeName .. "_" .. i,
       pName       = b.name,
-      temp        = temp,
-      maxTemp     = maxTemp,
+      temp        = bridge.temp,
+      maxTemp     = bridge.maxTemp,
       tempPercent = tempPercent,
-      hasWater    = hasWater,
       waterPct    = waterPct,
-      waterAmount = waterAmount,
-      waterCap    = waterCap,
-      hasLava     = hasLava,
-      lavaPct     = lavaPct,
-      lavaAmount  = lavaAmount,
-      lavaCap     = lavaCap,
+      waterAmount = bridge.waterAmount,
+      waterCap    = bridge.waterCap,
       steamPct    = steamPct,
-      steamAmount = steamAmount,
-      steamCap    = steamCap,
-      heatLevel   = heatLevel,
+      steamAmount = bridge.steamAmount,
+      steamCap    = bridge.steamCap,
       status      = status,
       alarm       = alarm,
     })
+
+    ::continue::
   end
 
   boilerStates = newStates
@@ -316,18 +225,12 @@ local function broadcastStatus()
       temp        = s.temp,
       maxTemp     = s.maxTemp,
       tempPercent = s.tempPercent,
-      hasWater    = s.hasWater,
       waterPct    = s.waterPct,
       waterAmount = s.waterAmount,
       waterCap    = s.waterCap,
-      hasLava     = s.hasLava,
-      lavaPct     = s.lavaPct,
-      lavaAmount  = s.lavaAmount,
-      lavaCap     = s.lavaCap,
       steamPct    = s.steamPct,
       steamAmount = s.steamAmount,
       steamCap    = s.steamCap,
-      heatLevel   = s.heatLevel,
       status      = s.status,
       alarm       = s.alarm,
       heartbeat   = os.epoch("utc"),
@@ -361,9 +264,8 @@ local function drawDisplayLinks()
       for _, s in ipairs(boilerStates) do
         d.setCursorPos(1, y)
         local parts = {}
-        if s.hasLava  then parts[#parts+1] = "L:" .. s.lavaPct  .. "%" end
-        if s.hasWater then parts[#parts+1] = "W:" .. s.waterPct .. "%" end
-        if s.steamPct > 0 then parts[#parts+1] = "S:" .. s.steamPct .. "%" end
+        parts[#parts+1] = "W:" .. s.waterPct .. "%"
+        parts[#parts+1] = "S:" .. s.steamPct .. "%"
         if s.tempPercent > 0 then parts[#parts+1] = "T:" .. s.tempPercent .. "%" end
         d.write(table.concat(parts, " "))
         y = y + 1
@@ -423,21 +325,9 @@ local function drawTerminal()
     print("Status: " .. s.status)
 
     term.setTextColor(colors.gray)
-    if s.tempPercent > 0 then
-      print("Temp:  " .. s.temp .. " / " .. s.maxTemp .. " (" .. s.tempPercent .. "%)")
-    end
-    if s.hasLava then
-      print("Lava:  " .. s.lavaAmount .. " / " .. s.lavaCap .. " mB (" .. s.lavaPct .. "%)")
-    end
-    if s.hasWater then
-      print("Water: " .. s.waterAmount .. " / " .. s.waterCap .. " mB (" .. s.waterPct .. "%)")
-    end
-    if s.steamPct > 0 then
-      print("Steam: " .. s.steamAmount .. " / " .. s.steamCap .. " mB (" .. s.steamPct .. "%)")
-    end
-    if s.heatLevel then
-      print("Heat:  " .. s.heatLevel)
-    end
+    print("Temp:  " .. s.temp .. " / " .. s.maxTemp .. " (" .. s.tempPercent .. "%)")
+    print("Water: " .. s.waterAmount .. " / " .. s.waterCap .. " mB (" .. s.waterPct .. "%)")
+    print("Steam: " .. s.steamAmount .. " / " .. s.steamCap .. " mB (" .. s.steamPct .. "%)")
   end
 end
 

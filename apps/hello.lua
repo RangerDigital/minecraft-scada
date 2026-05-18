@@ -527,8 +527,7 @@ local function drawPlantB(mon, heartbeat)
     end
 
     local sc = (alm
-             or node.status == "WATER_LOW"
-             or node.status == "LAVA_LOW")  and colors.red
+             or node.status == "WATER_LOW")  and colors.red
             or (node.status == "WARMING"
              or node.status == "STEAM_HIGH") and colors.yellow
             or colors.lime
@@ -536,11 +535,7 @@ local function drawPlantB(mon, heartbeat)
     if y + 1 <= h then
       mon.setCursorPos(colX, y + 1)
       mon.setTextColor(sc)
-      -- show lava % if present, otherwise water %; always show temp
-      local fluidLabel = node.hasLava and ("L:" .. string.format("%3d", node.lavaPct) .. "%")
-                      or node.hasWater and ("W:" .. string.format("%3d", node.waterPct) .. "%")
-                      or "         "
-      mon.write(fluidLabel .. string.format(" T:%3d%%", node.tempPercent or 0))
+      mon.write(string.format("W:%3d%% T:%3d%%", node.waterPct or 0, node.tempPercent or 0))
     end
     if y + 2 <= h then
       mon.setCursorPos(colX, y + 2)
@@ -620,10 +615,7 @@ local function networkLoop()
           app         = "boiler",
           lastSeen    = os.epoch("utc"),
           tempPercent = msg.tempPercent or 0,
-          hasWater    = msg.hasWater,
           waterPct    = msg.waterPct    or 0,
-          hasLava     = msg.hasLava,
-          lavaPct     = msg.lavaPct     or 0,
           steamPct    = msg.steamPct    or 0,
           status      = msg.status      or "?",
           alarm       = msg.alarm,
