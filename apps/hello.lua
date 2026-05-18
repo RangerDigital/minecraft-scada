@@ -252,6 +252,67 @@ local function widgetTank(mon, name, node, ox, y, w, budget)
 end
 
 -- =========================================================
+--  Alarm panel widget
+-- =========================================================
+
+local CRIT_PCT = 20   -- ≤ this is CRITICAL
+local WARN_PCT = 50   -- < this (but > CRIT) is WARNING
+
+local function widgetAlarms(mon, ox, y, w, budget)
+  local crits = {}
+  local warns  = {}
+
+  for name, node in pairs(nodes) do
+    if nodeAlive(node) and node.app == "tank" then
+      local pct = node.percent or 0
+      if     pct <= CRIT_PCT then
+        table.insert(crits, { name = name, pct = pct })
+      elseif pct <  WARN_PCT then
+        table.insert(warns,  { name = name, pct = pct })
+      end
+    end
+  end
+  table.sort(crits, function(a, b) return a.pct < b.pct end)
+  table.sort(warns,  function(a, b) return a.pct < b.pct end)
+
+  local row    = 0
+  local active = #crits > 0 or #warns > 0
+
+  -- Summary line
+  led(mon, ox, y, active and colors.red or colors.lime, true)
+  mon.setCursorPos(ox + 2, y)
+  if active then
+    mon.setTextColor(colors.red)
+    local s = "ALARMS"
+    if #crits > 0 then s = s .. "  " .. #crits .. " CRIT" end
+    if #warns  > 0 then s = s .. "  " .. #warns  .. " WARN" end
+    mon.write(s)
+  else
+    mon.setTextColor(colors.lime)
+    mon.write("All clear")
+  end
+  row = 1
+
+  for _, e in ipairs(crits) do
+    if row >= budget then break end
+    mon.setCursorPos(ox + 2, y + row)
+    mon.setTextColor(colors.red)
+    mon.write(string.format("CRIT  %-12s %3d%%", shortName(e.name, 12), e.pct))
+    row = row + 1
+  end
+
+  for _, e in ipairs(warns) do
+    if row >= budget then break end
+    mon.setCursorPos(ox + 2, y + row)
+    mon.setTextColor(colors.yellow)
+    mon.write(string.format("WARN  %-12s %3d%%", shortName(e.name, 12), e.pct))
+    row = row + 1
+  end
+
+  return row
+end
+
+-- =========================================================
 --  Main monitor
 -- =========================================================
 
@@ -262,6 +323,18 @@ local function drawMain(mon, id, heartbeat)
 
   drawHeader(mon, id, heartbeat)
 
+  -- Alarm panel (always visible below header)
+  local alarmBudget = math.min(4, math.floor((h - 1) / 3))
+  local alarmUsed   = widgetAlarms(mon, 2, 2, w, alarmBudget)
+
+  -- Separator
+  local sepY = 2 + alarmUsed
+  if sepY <= h then
+    mon.setCursorPos(1, sepY)
+    mon.setTextColor(colors.gray)
+    mon.write(("-"):rep(w))
+  end
+
   -- Collect live nodes sorted by name for stable layout
   local live = {}
   for name, node in pairs(nodes) do
@@ -271,22 +344,22 @@ local function drawMain(mon, id, heartbeat)
   end
   table.sort(live, function(a, b) return a.name < b.name end)
 
+  local startY = sepY + 1
+
   if #live == 0 then
-    mon.setCursorPos(3, 3)
+    mon.setCursorPos(3, startY)
     mon.setTextColor(colors.gray)
     mon.write("Waiting for SCADA nodes...")
-    statusLine(mon, 3, 5, colors.lime, "HB",    heartbeat)
-    statusLine(mon, 3, 7, colors.cyan, "NET",   wirelessModem ~= nil)
-    statusLine(mon, 3, 9,
-      alarmActive() and colors.red or colors.gray, "ALARM", alarmActive())
+    statusLine(mon, 3, startY + 2, colors.lime, "HB",  heartbeat)
+    statusLine(mon, 3, startY + 4, colors.cyan, "NET", wirelessModem ~= nil)
     return
   end
 
-  -- Distribute available height evenly across discovered nodes
-  local contentH = h - 2
+  -- Distribute remaining height evenly across discovered nodes
+  local contentH = h - startY + 1
   local perNode  = math.max(2, math.floor(contentH / #live))
 
-  local y = 3
+  local y = startY
   for _, entry in ipairs(live) do
     if y > h then break end
 
