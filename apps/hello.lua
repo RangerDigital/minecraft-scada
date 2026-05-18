@@ -9,7 +9,12 @@ local monitors = {
 local modem = peripheral.find(
   "modem",
   function(_, m)
-    return m.isWireless()
+
+    local ok, wireless = pcall(function()
+      return m.isWireless()
+    end)
+
+    return ok and wireless
   end
 )
 
@@ -42,10 +47,47 @@ local function center(mon, y, text, color)
   mon.write(text)
 end
 
-local function draw(mon, heartbeat)
+local function clear(mon)
 
   mon.setBackgroundColor(colors.black)
   mon.clear()
+  mon.setCursorPos(1,1)
+end
+
+local function led(mon, x, y, color, on)
+
+  if on then
+    mon.setBackgroundColor(color)
+  else
+    mon.setBackgroundColor(colors.gray)
+  end
+
+  mon.setCursorPos(x,y)
+  mon.write(" ")
+
+  mon.setBackgroundColor(colors.black)
+end
+
+-- =========================================================
+--  Configure monitors
+-- =========================================================
+
+for _, mon in ipairs(monitors) do
+
+  pcall(function()
+
+    mon.setTextScale(0.5)
+
+  end)
+end
+
+-- =========================================================
+--  Main monitor
+-- =========================================================
+
+local function drawMain(mon, heartbeat)
+
+  clear(mon)
 
   local w,h = mon.getSize()
 
@@ -64,7 +106,7 @@ local function draw(mon, heartbeat)
   center(
     mon,
     6,
-    "STORAGE TELEMETRY",
+    "SCADA TELEMETRY",
     colors.cyan
   )
 
@@ -100,23 +142,94 @@ local function draw(mon, heartbeat)
   mon.setTextColor(colors.red)
   mon.write(" +" .. latest.overflow)
 
-  -- heartbeat led
+  -- status leds
 
-  mon.setCursorPos(w-3,2)
+  mon.setTextColor(colors.lightGray)
 
-  if heartbeat then
-    mon.setBackgroundColor(colors.lime)
-  else
-    mon.setBackgroundColor(colors.green)
-  end
+  mon.setCursorPos(3,19)
+  mon.write("Heartbeat")
 
-  mon.write(" ")
+  led(
+    mon,
+    16,
+    19,
+    colors.lime,
+    heartbeat
+  )
 
-  mon.setBackgroundColor(colors.black)
+  mon.setCursorPos(3,21)
+  mon.write("Wireless")
+
+  led(
+    mon,
+    16,
+    21,
+    modem and colors.cyan or colors.red,
+    heartbeat
+  )
+
+  mon.setCursorPos(3,23)
+  mon.write("Monitors")
+
+  led(
+    mon,
+    16,
+    23,
+    colors.orange,
+    true
+  )
 end
 
 -- =========================================================
---  Receive telemetry
+--  Tiny monitor
+-- =========================================================
+
+local function drawTiny(mon, heartbeat)
+
+  clear(mon)
+
+  local w,h = mon.getSize()
+
+  paintutils.drawFilledBox(
+    1,1,w,h,
+    colors.gray
+  )
+
+  local centerX = math.floor(w/2)
+
+  led(
+    mon,
+    centerX,
+    3,
+    colors.lime,
+    heartbeat
+  )
+
+  led(
+    mon,
+    centerX,
+    6,
+    modem and colors.cyan or colors.red,
+    heartbeat
+  )
+
+  led(
+    mon,
+    centerX,
+    9,
+    colors.orange,
+    true
+  )
+
+  mon.setTextColor(colors.black)
+
+  center(mon, 2, "HB", colors.black)
+  center(mon, 5, "NET", colors.black)
+  center(mon, 8, "MON", colors.black)
+end
+
+-- =========================================================
+--  Network
 -- =========================================================
 
 local function networkLoop()
@@ -137,7 +250,7 @@ local function networkLoop()
 end
 
 -- =========================================================
---  UI loop
+--  UI
 -- =========================================================
 
 local function uiLoop()
@@ -148,13 +261,15 @@ local function uiLoop()
 
     heartbeat = not heartbeat
 
-    for _, mon in ipairs(monitors) do
+    for i, mon in ipairs(monitors) do
 
       pcall(function()
 
-        mon.setTextScale(0.5)
-
-        draw(mon, heartbeat)
+        if i == 4 then
+          drawTiny(mon, heartbeat)
+        else
+          drawMain(mon, heartbeat)
+        end
 
       end)
     end

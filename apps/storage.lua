@@ -10,6 +10,41 @@ local CONFIG = {
 }
 
 -- =========================================================
+--  Screen Helpers
+-- =========================================================
+
+local function resetScreen()
+
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.white)
+
+  term.clear()
+  term.setCursorPos(1,1)
+end
+
+local function drawHome()
+
+  resetScreen()
+
+  term.setTextColor(colors.orange)
+
+  print("================================")
+  print("      FACTORY OS STORAGE")
+  print("================================")
+  print("")
+
+  term.setTextColor(colors.lime)
+
+  print("Storage node online")
+
+  term.setTextColor(colors.lightGray)
+
+  print("")
+  print("Place item on depot")
+  print("to edit overflow limit")
+end
+
+-- =========================================================
 --  Peripherals
 -- =========================================================
 
@@ -41,20 +76,20 @@ if modem then
 end
 
 -- =========================================================
---  Data directory
+--  Data
 -- =========================================================
 
 if not fs.exists("/data") then
   fs.makeDir("/data")
 end
 
--- =========================================================
---  Policies
--- =========================================================
-
 local POLICY_FILE = "/data/policies.json"
 
 local policies = {}
+
+-- =========================================================
+--  Policies
+-- =========================================================
 
 local function loadPolicies()
 
@@ -93,13 +128,6 @@ loadPolicies()
 --  Helpers
 -- =========================================================
 
-local function log(text, color)
-
-  term.setTextColor(color or colors.white)
-
-  print(text)
-end
-
 local function getStockMap()
 
   local map = {}
@@ -121,10 +149,6 @@ end
 
 local function getDepotItem()
 
-  if not depot then
-    return nil
-  end
-
   local ok, item = pcall(function()
 
     return depot.getItemDetail(1)
@@ -139,7 +163,7 @@ local function getDepotItem()
 end
 
 -- =========================================================
---  Config UI
+--  Config Loop
 -- =========================================================
 
 local lastDepotItem = nil
@@ -152,9 +176,7 @@ local function configLoop()
 
     if item and item ~= lastDepotItem then
 
-      term.setBackgroundColor(colors.black)
-      term.clear()
-      term.setCursorPos(1,1)
+      resetScreen()
 
       term.setTextColor(colors.orange)
 
@@ -202,10 +224,6 @@ local function configLoop()
         print("")
         print("Saved.")
 
-        -- =============================================
-        --  Broadcast policy update
-        -- =============================================
-
         if modem then
 
           rednet.broadcast({
@@ -233,7 +251,7 @@ local function configLoop()
 
       sleep(2)
 
-      term.clear()
+      drawHome()
     end
 
     lastDepotItem = item
@@ -243,7 +261,7 @@ local function configLoop()
 end
 
 -- =========================================================
---  Overflow Export
+--  Export Loop
 -- =========================================================
 
 local lastRequest = -999
@@ -300,18 +318,6 @@ local function exportLoop()
 
           lastRequest = os.clock()
 
-          log(
-            "[EXPORT] "
-            .. amount
-            .. " "
-            .. selectedItem,
-            colors.lime
-          )
-
-          -- =========================================
-          --  Broadcast telemetry
-          -- =========================================
-
           if modem then
 
             rednet.broadcast({
@@ -330,13 +336,6 @@ local function exportLoop()
 
             }, "factoryos")
           end
-
-        else
-
-          log(
-            "[ERROR] " .. tostring(err),
-            colors.red
-          )
         end
       end
     end
@@ -349,44 +348,7 @@ end
 --  Boot
 -- =========================================================
 
-term.setBackgroundColor(colors.black)
-term.clear()
-term.setCursorPos(1,1)
-
-term.setTextColor(colors.orange)
-
-print("================================")
-print("      FACTORY OS STORAGE")
-print("================================")
-print("")
-
-term.setTextColor(colors.lime)
-
-print("Storage node online")
-
-term.setTextColor(colors.lightGray)
-
-print("")
-print("Policies: " .. tostring(
-  (function()
-
-    local c = 0
-
-    for _ in pairs(policies) do
-      c = c + 1
-    end
-
-    return c
-
-  end)()
-))
-
-print("")
-print("Waiting for depot input...")
-
--- =========================================================
---  Main
--- =========================================================
+drawHome()
 
 parallel.waitForAny(
   configLoop,
