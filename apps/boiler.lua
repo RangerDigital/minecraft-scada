@@ -34,13 +34,19 @@ local nodeName =
 local _, wirelessSide = wireless.find()
 
 -- Discover boiler peripherals on the wired network.
--- Create boilers expose getTemperature() (and usually fluid tank methods).
+-- Create mod exposes boiler valves as "create:fluid_tank" (or "create_fluid_tank").
+-- Fall back to checking for getTemperature() for other integrations.
 local boilers = {}
 
 for _, name in ipairs(peripheral.getNames()) do
-  local p = peripheral.wrap(name)
-  if type(p) == "table" and type(p.getTemperature) == "function" then
-    table.insert(boilers, { name = name, p = p })
+  local pType = peripheral.getType(name)
+  local p     = peripheral.wrap(name)
+  if type(p) == "table" then
+    local isFluidTank = pType and pType:find("fluid_tank") ~= nil
+    local hasTemp     = type(p.getTemperature) == "function"
+    if isFluidTank or hasTemp then
+      table.insert(boilers, { name = name, p = p })
+    end
   end
 end
 
@@ -133,8 +139,10 @@ local function readAllBoilers()
     local maxTemp = 1000  -- Create high-pressure default
     local ok
 
-    ok, temp = pcall(function() return p.getTemperature() end)
-    if not ok or type(temp) ~= "number" then temp = 0 end
+    if type(p.getTemperature) == "function" then
+      ok, temp = pcall(function() return p.getTemperature() end)
+      if not ok or type(temp) ~= "number" then temp = 0 end
+    end
 
     if type(p.getMaxTemperature) == "function" then
       local mOk, m = pcall(function() return p.getMaxTemperature() end)
