@@ -1,5 +1,5 @@
 -- =========================================================
---  Factory OS Train Station Node v1.0
+--  Factory OS Train Station Node v2.0
 --  Monitors Create: Steam 'n' Rails train stations and
 --  broadcasts train_status telemetry over FactoryOS.
 -- =========================================================
@@ -54,9 +54,45 @@ local monitors = { peripheral.find("monitor") }
 --  State
 -- =========================================================
 
--- One record per discovered station peripheral
--- { name, present, train, assembling, alarm }
+-- One record per discovered station peripheral:
+-- { name, stationName, present, train, cars,
+--   assembling, idle,
+--   scheduleCurrent, scheduleNext, scheduleTotal, scheduleCyclic,
+--   alarm }
 local stationStates = {}
+
+-- =========================================================
+--  Helpers
+-- =========================================================
+
+-- Safe peripheral call: returns value or nil on error
+local function try(fn)
+  local ok, v = pcall(fn)
+  return ok and v or nil
+end
+
+-- Parse a schedule table from the peripheral into something useful
+local function parseSchedule(sched)
+  if type(sched) ~= "table" then return nil, nil, nil, nil end
+
+  local entries = type(sched.entries) == "table" and sched.entries or {}
+  local total   = #entries
+  if total == 0 then return nil, nil, 0, sched.cyclic end
+
+  local cur     = (type(sched.currentEntry) == "number") and sched.currentEntry or 1
+  cur           = math.max(1, math.min(cur, total))
+
+  local function destOf(e)
+    if type(e) ~= "table" then return nil end
+    return e.destination or e.name or e.id
+  end
+
+  local currentDest = destOf(entries[cur])
+  local nextIdx     = (cur % total) + 1
+  local nextDest    = destOf(entries[nextIdx])
+
+  return currentDest, nextDest, total, sched.cyclic
+end
 
 -- =========================================================
 --  Reading
@@ -66,35 +102,43 @@ local function readAllStations()
   local newStates = {}
 
   for _, s in ipairs(stations) do
-    local ok, present = pcall(function()
-      return s.p.isTrainPresent()
-    end)
-    if not ok then present = false end
+    -- Core presence
+    local present    = try(function() return s.p.isTrainPresent() end) == true
+    local assembling = try(function() return s.p.isAssembling()   end) == true
 
-    local trainName = nil
-    if present then
-      local tok, tn = pcall(function()
-        return s.p.getTrainName()
-      end)
-      if tok and type(tn) == "string" then
-        trainName = tn
+    -- Station's configured in-game name
+    local stationName = try(function() return s.p.getStationName() end) or s.name
+
+    -- Train info (only meaningful when present)
+    local trainName, cars, idle
+    if present or assembling then
+      trainName = try(function() return s.p.getTrainName() end)
+      cars      = try(function() return s.p.getCarCount()  end)
+      -- getTrainCars() may return a list instead
+      if not cars then
+        local carList = try(function() return s.p.getTrainCars() end)
+        if type(carList) == "table" then cars = #carList end
       end
+      idle = try(function() return s.p.isCurrentlyIdle() end) == true
     end
 
-    local assembling = false
-    do
-      local aok, av = pcall(function()
-        return s.p.isAssembling()
-      end)
-      if aok and type(av) == "boolean" then assembling = av end
-    end
+    -- Schedule
+    local schedRaw     = try(function() return s.p.getSchedule() end)
+    local sCur, sNext, sTotal, sCyclic = parseSchedule(schedRaw)
 
     table.insert(newStates, {
-      name       = s.name,
-      present    = present,
-      train      = trainName,
-      assembling = assembling,
-      alarm      = false,
+      name          = s.name,
+      stationName   = stationName,
+      present       = present,
+      assembling    = assembling,
+      train         = trainName,
+      cars          = cars,
+      idle          = idle,
+      scheduleCurrent = sCur,
+      scheduleNext    = sNext,
+      scheduleTotal   = sTotal,
+      scheduleCyclic  = sCyclic,
+      alarm           = false,
     })
   end
 
@@ -109,28 +153,33 @@ local function broadcastStatus()
   if not wirelessSide then return end
 
   for i, s in ipairs(stationStates) do
-    -- Use nodeLabel for single-station nodes; suffix index when multiple
     local stLabel = (#stations == 1) and nodeLabel
                     or (nodeLabel .. " " .. i)
 
     rednet.broadcast({
-      type       = "train_status",
-      app        = "train",
-      node       = nodeName .. "_" .. i,
-      label      = stLabel,
-      group      = nodeGroup,
-      station    = s.name,
-      present    = s.present,
-      train      = s.train or "none",
-      assembling = s.assembling,
-      alarm      = s.alarm,
-      heartbeat  = os.epoch("utc"),
+      type            = "train_status",
+      app             = "train",
+      node            = nodeName .. "_" .. i,
+      label           = stLabel,
+      group           = nodeGroup,
+      station         = s.stationName,
+      present         = s.present,
+      train           = s.train,
+      cars            = s.cars,
+      assembling      = s.assembling,
+      idle            = s.idle,
+      scheduleCurrent = s.scheduleCurrent,
+      scheduleNext    = s.scheduleNext,
+      scheduleTotal   = s.scheduleTotal,
+      scheduleCyclic  = s.scheduleCyclic,
+      alarm           = s.alarm,
+      heartbeat       = os.epoch("utc"),
     }, PROTOCOL)
   end
 end
 
 -- =========================================================
---  Status monitor
+--  Status monitor (tiny 1x1 block monitor)
 -- =========================================================
 
 local function anyAlarm()
@@ -156,30 +205,50 @@ local function drawMonitorStatus(mon, heartbeat)
 end
 
 -- =========================================================
---  Local terminal
+--  Local terminal – rich HMI display
 -- =========================================================
 
 local heartbeat = false
 
-local function drawTerminal()
-  resetTerm()
-
-  term.setTextColor(colors.orange)
-  print("Factory OS Train Node v1.0")
-  print("")
-
-  ledTerm(colors.lime, "Heartbeat")
-  ledTerm(wirelessSide and colors.cyan or colors.red, "Network")
-
-  print("")
-
-  term.setTextColor(colors.gray)
-  print("Node:     " .. nodeName)
-  print("Label:    " .. nodeLabel)
-  if nodeGroup ~= "" then
-    print("Group:    " .. nodeGroup)
+local function printLed(color, label, active)
+  if active then
+    term.setBackgroundColor(color)
+    term.setTextColor(colors.black)
+    term.write(" ")
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(color)
+    term.write(" " .. label .. "  ")
+  else
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.gray)
+    term.write("   " .. label .. "  ")
   end
-  print("Stations: " .. #stations)
+end
+
+local function drawTerminal()
+  local W = term.getSize()
+  term.setBackgroundColor(colors.black)
+  term.clear()
+  term.setCursorPos(1, 1)
+
+  -- Header
+  term.setTextColor(colors.orange)
+  term.write("Factory OS  Train Node v2.0")
+  term.setCursorPos(1, 2)
+  printLed(colors.lime, "HB",  heartbeat)
+  printLed(wirelessSide and colors.cyan or colors.red, "NET", wirelessSide ~= nil)
+  printLed(anyAlarm() and colors.red or colors.gray, "ALARM", anyAlarm())
+  print("")
+
+  -- Identity
+  term.setTextColor(colors.gray)
+  print(string.format("Node:  %-20s  Stations: %d", nodeName, #stations))
+  term.setTextColor(colors.white)
+  print(string.format("Label: %s", nodeLabel))
+  if nodeGroup ~= "" then
+    term.setTextColor(colors.orange)
+    print(string.format("Group: %s", nodeGroup))
+  end
 
   if #stations == 0 then
     print("")
@@ -190,16 +259,55 @@ local function drawTerminal()
   end
 
   for _, s in ipairs(stationStates) do
-    print("")
-    if s.present then
-      term.setTextColor(colors.lime)
-      print("Present: " .. (s.train or "unknown"))
-    elseif s.assembling then
+    -- Section divider
+    term.setTextColor(colors.gray)
+    print(("-"):rep(W))
+
+    -- Station name
+    term.setTextColor(colors.cyan)
+    print("  " .. s.stationName)
+
+    -- Status line
+    if s.assembling then
       term.setTextColor(colors.yellow)
-      print("Assembling...")
+      print("  Status:  ASSEMBLING")
+    elseif s.present then
+      term.setTextColor(colors.lime)
+      print("  Status:  PRESENT")
     else
       term.setTextColor(colors.gray)
-      print(s.name .. " - empty")
+      print("  Status:  EMPTY")
+    end
+
+    -- Train details
+    if s.present or s.assembling then
+      term.setTextColor(colors.white)
+      local trainLine = "  Train:   " .. (s.train or "unknown")
+      if s.cars then
+        trainLine = trainLine .. string.format("  [%d car%s]", s.cars, s.cars == 1 and "" or "s")
+      end
+      print(trainLine)
+
+      -- Idle status
+      if s.idle ~= nil then
+        term.setTextColor(s.idle and colors.gray or colors.lime)
+        print("  Motion:  " .. (s.idle and "idle" or "active"))
+      end
+    end
+
+    -- Schedule
+    if s.scheduleTotal and s.scheduleTotal > 0 then
+      term.setTextColor(colors.lightGray)
+      local cycMark = s.scheduleCyclic and " (cyclic)" or ""
+      print(string.format("  Route:   %d stops%s", s.scheduleTotal, cycMark))
+      if s.scheduleCurrent then
+        term.setTextColor(colors.white)
+        print("  Heading: " .. s.scheduleCurrent)
+      end
+      if s.scheduleNext and s.scheduleNext ~= s.scheduleCurrent then
+        term.setTextColor(colors.gray)
+        print("  Next:    " .. s.scheduleNext)
+      end
     end
   end
 end

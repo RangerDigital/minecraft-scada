@@ -186,10 +186,11 @@ end
 -- =========================================================
 
 local function widgetStorage(mon, name, node, ox, y, w, budget)
+  local avail = w - ox - 1
   led(mon, ox, y, nodeAlive(node) and colors.lime or colors.red, true)
   mon.setCursorPos(ox + 2, y)
   mon.setTextColor(colors.cyan)
-  mon.write(shortName(node.label or name, 18) .. " [storage]")
+  mon.write(shortName(node.label or name, avail))
 
   local rows = 1
 
@@ -213,8 +214,9 @@ local function widgetStorage(mon, name, node, ox, y, w, budget)
 end
 
 local function widgetTank(mon, name, node, ox, y, w, budget)
-  local pct = node.percent or 0
-  local lbl = shortName(node.label or name, 16)
+  local pct  = node.percent or 0
+  local lblW = math.max(16, w - ox - 20)   -- leave room for " NNN%  LEVEL_STR"
+  local lbl  = shortName(node.label or name, lblW)
 
   led(mon, ox, y, nodeAlive(node) and colors.lime or colors.red, true)
   mon.setCursorPos(ox + 2, y)
@@ -228,7 +230,7 @@ local function widgetTank(mon, name, node, ox, y, w, budget)
   end
 
   mon.write(string.format(
-    "%-16s %3d%%  %-11s",
+    "%-" .. lblW .. "s %3d%%  %-8s",
     lbl,
     pct,
     node.level or "?"
@@ -254,26 +256,50 @@ end
 
 local function widgetTrain(mon, name, node, ox, y, w, budget)
   local alive = nodeAlive(node)
-  local lbl   = shortName(node.label or name, 14)
+  local lblW  = math.max(14, w - ox - 16)  -- leave room for status string
+  local lbl   = shortName(node.label or name, lblW)
 
-  led(mon, ox, y, alive and colors.lime or colors.red, true)
+  -- Status colour
+  local sc = not alive       and colors.red
+          or node.assembling  and colors.yellow
+          or node.present     and colors.lime
+          or                      colors.gray
+
+  -- Row 1: LED  label  status
+  led(mon, ox, y, sc, true)
   mon.setCursorPos(ox + 2, y)
+  mon.setTextColor(sc)
+  local statusStr = not alive      and "OFFLINE"
+                 or node.assembling and "ASSEMBLING"
+                 or node.present    and "PRESENT"
+                 or                     "empty"
+  mon.write(string.format("%-" .. lblW .. "s  %s", lbl, statusStr))
 
-  if not alive then
-    mon.setTextColor(colors.red)
-    mon.write(string.format("%-14s  offline", lbl))
-  elseif node.assembling then
-    mon.setTextColor(colors.yellow)
-    mon.write(string.format("%-14s  assembling", lbl))
-  elseif node.present then
-    mon.setTextColor(colors.lime)
-    mon.write(string.format("%-14s  %s", lbl, shortName(node.train or "?", 16)))
+  if budget < 2 then return 1 end
+
+  -- Row 2: train name  cars  schedule
+  mon.setCursorPos(ox + 2, y + 1)
+  if node.present or node.assembling then
+    local trainStr = shortName(node.train or "?", 14)
+    local carsStr  = node.cars and (" [" .. node.cars .. "c]") or ""
+    local routeStr = ""
+    if node.scheduleCurrent then
+      routeStr = "  ->" .. shortName(node.scheduleCurrent, 12)
+      if node.scheduleTotal then
+        routeStr = routeStr .. " (" .. node.scheduleTotal .. ")"
+      end
+    end
+    mon.setTextColor(colors.lightGray)
+    mon.write((trainStr .. carsStr .. routeStr):sub(1, w - ox - 2))
   else
-    mon.setTextColor(colors.gray)
-    mon.write(string.format("%-14s  empty", lbl))
+    -- Show station name on row 2 when empty
+    if node.station then
+      mon.setTextColor(colors.gray)
+      mon.write(shortName(node.station, w - ox - 2))
+    end
   end
 
-  return 1
+  return 2
 end
 
 -- =========================================================
@@ -481,15 +507,20 @@ local function networkLoop()
 
       elseif msg.type == "train_status" then
         nodes[msg.node] = {
-          app        = "train",
-          label      = msg.label or msg.node,
-          group      = msg.group or "",
-          lastSeen   = os.epoch("utc"),
-          station    = msg.station,
-          present    = msg.present,
-          train      = msg.train,
-          assembling = msg.assembling,
-          alarm      = msg.alarm,
+          app             = "train",
+          label           = msg.label or msg.node,
+          group           = msg.group or "",
+          lastSeen        = os.epoch("utc"),
+          station         = msg.station,
+          present         = msg.present,
+          train           = msg.train,
+          cars            = msg.cars,
+          assembling      = msg.assembling,
+          idle            = msg.idle,
+          scheduleCurrent = msg.scheduleCurrent,
+          scheduleNext    = msg.scheduleNext,
+          scheduleTotal   = msg.scheduleTotal,
+          alarm           = msg.alarm,
         }
         addLog("train " .. tostring(msg.node) .. " " .. (msg.present and "present" or "empty"))
 

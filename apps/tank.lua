@@ -193,7 +193,11 @@ end
 local function broadcastStatus()
   if not wirelessSide then return end
 
-  for _, s in ipairs(tankStates) do
+  for i, s in ipairs(tankStates) do
+    local tankLabel = (#tankStates > 1)
+      and (nodeLabel .. " " .. string.char(64 + i))
+      or nodeLabel
+
     rednet.broadcast({
       type      = "tank_status",
       app       = "tank",
@@ -205,7 +209,7 @@ local function broadcastStatus()
       percent   = s.percent,
       level     = s.level,
       alarm     = s.alarm,
-      label     = nodeLabel,
+      label     = tankLabel,
       group     = nodeGroup,
       heartbeat = os.epoch("utc"),
     }, PROTOCOL)

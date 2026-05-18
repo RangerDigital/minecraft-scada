@@ -63,14 +63,20 @@ local function networkLoop()
         }
       elseif msg.type == "train_status" then
         nodes[msg.node] = {
-          app        = "train",
-          label      = msg.label or msg.node,
-          group      = msg.group or "",
-          lastSeen   = os.epoch("utc"),
-          present    = msg.present,
-          train      = msg.train,
-          assembling = msg.assembling,
-          alarm      = false,
+          app             = "train",
+          label           = msg.label or msg.node,
+          group           = msg.group or "",
+          lastSeen        = os.epoch("utc"),
+          station         = msg.station,
+          present         = msg.present,
+          train           = msg.train,
+          cars            = msg.cars,
+          assembling      = msg.assembling,
+          idle            = msg.idle,
+          scheduleCurrent = msg.scheduleCurrent,
+          scheduleNext    = msg.scheduleNext,
+          scheduleTotal   = msg.scheduleTotal,
+          alarm           = false,
         }
       elseif msg.type == "alarm" then
         addAlarm(tostring(msg.node) .. " " .. tostring(msg.message))
@@ -84,7 +90,6 @@ end
 -- =========================================================
 
 local W, H = term.getSize()
-local BAR_W = 12   -- fill-bar width for tank/boiler rows
 
 local function ledTerm(color, label, active)
   if active then
@@ -101,9 +106,9 @@ local function ledTerm(color, label, active)
   end
 end
 
-local function fillBar(pct, color)
-  local filled = math.floor(BAR_W * math.min(pct, 100) / 100)
-  for i = 1, BAR_W do
+local function fillBar(pct, color, barW)
+  local filled = math.floor(barW * math.min(pct, 100) / 100)
+  for i = 1, barW do
     term.setBackgroundColor(i <= filled and color or colors.gray)
     term.write(" ")
   end
@@ -156,6 +161,10 @@ local function drawUI(heartbeat)
   y = y + 1
 
   -- ── Node list ─────────────────────────────────────────
+  -- Layout constants scaled to screen width
+  local valCol = math.max(14, math.floor(W * 0.5))
+  local lblW   = valCol - 3           -- label chars (after LED + space)
+  local barW   = W - valCol - 4       -- fill-bar chars (leave 4 for " NNN%")
   -- Collect nodes, grouped by node.group
   local groups   = {}
   local ordering = {}
@@ -221,7 +230,7 @@ local function drawUI(heartbeat)
       end
 
       -- Label (truncated)
-      local nameW = math.min(#lbl, 10)
+      local nameW = math.min(#lbl, lblW)
       term.setTextColor(alive and colors.white or colors.gray)
       term.write(" " .. lbl:sub(1, nameW))
 
@@ -231,13 +240,13 @@ local function drawUI(heartbeat)
         local barColor = (alm or pct <= 20) and colors.red
                       or pct <= 50          and colors.yellow
                       or colors.orange
-        term.setCursorPos(13, y)
-        fillBar(pct, barColor)
+        term.setCursorPos(valCol, y)
+        fillBar(pct, barColor, barW)
         term.setTextColor(barColor)
         term.write(string.format("%3d%%", pct))
 
       elseif node.app == "train" then
-        term.setCursorPos(13, y)
+        term.setCursorPos(valCol, y)
         if not alive then
           term.setTextColor(colors.red)
           term.write("offline")
@@ -246,10 +255,17 @@ local function drawUI(heartbeat)
           term.write("assembling")
         elseif node.present then
           term.setTextColor(colors.lime)
-          term.write((node.train or "?"):sub(1, W - 13))
+          local tStr = (node.train or "?"):sub(1, W - valCol - 4)
+          local cStr = node.cars and ("[" .. node.cars .. "c]") or ""
+          term.write((tStr .. " " .. cStr):sub(1, W - valCol))
         else
           term.setTextColor(colors.gray)
-          term.write("empty")
+          local dest = node.scheduleCurrent
+          if dest then
+            term.write(("->" .. dest):sub(1, W - valCol))
+          else
+            term.write("empty")
+          end
         end
 
       elseif node.app == "storage" then
@@ -257,7 +273,7 @@ local function drawUI(heartbeat)
         for _, item in ipairs(node.items or {}) do
           if (item.overflow or 0) > 0 then overflow = overflow + 1 end
         end
-        term.setCursorPos(12, y)
+        term.setCursorPos(valCol, y)
         if overflow > 0 then
           term.setTextColor(colors.red)
           term.write(overflow .. " overflow")
@@ -266,7 +282,7 @@ local function drawUI(heartbeat)
           term.write("nominal")
         end
       else
-        term.setCursorPos(12, y)
+        term.setCursorPos(valCol, y)
         term.setTextColor(colors.gray)
         term.write(tostring(node.app or "?"))
       end
