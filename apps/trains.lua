@@ -117,7 +117,20 @@ local function parseSchedule(sched)
 
   local function destOf(e)
     if type(e) ~= "table" then return nil end
-    return e.destination or e.name or e.id
+    -- Direct field (some versions)
+    if e.destination then return e.destination end
+    if e.name        then return e.name        end
+    -- Create: S'n'R stores destination in instruction.data.text
+    if type(e.instruction) == "table" then
+      local d = e.instruction.data
+      if type(d) == "table" then
+        if d.text        then return d.text        end
+        if d.destination then return d.destination end
+        if d.name        then return d.name        end
+      end
+      if e.instruction.text then return e.instruction.text end
+    end
+    return e.id
   end
 
   local currentDest = destOf(entries[cur])

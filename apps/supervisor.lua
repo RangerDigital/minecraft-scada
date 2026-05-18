@@ -278,7 +278,7 @@ local function widgetTrain(mon, name, node, ox, y, w, budget)
           or node.present      and colors.lime
           or                       colors.gray
 
-  -- Row 1: LED  label  status
+  -- Row 1: LED  label  station  status
   led(mon, ox, y, sc, true)
   mon.setCursorPos(ox + 2, y)
   mon.setTextColor(sc)
@@ -286,7 +286,10 @@ local function widgetTrain(mon, name, node, ox, y, w, budget)
                  or node.assembling  and "ASSEMBLING"
                  or node.present     and "PRESENT"
                  or                      "empty"
-  mon.write(string.format("%-" .. lblW .. "s  %s", lbl, statusStr))
+  -- Show: label [station]  STATUS  (station name in brackets when we have it)
+  local stationSuffix = node.station and (" [" .. shortName(node.station, 12) .. "]") or ""
+  local leftStr = shortName(node.label or name, lblW - #stationSuffix) .. stationSuffix
+  mon.write(string.format("%-" .. lblW .. "s  %s", leftStr, statusStr))
 
   local row = 1
   if budget < 2 then return row end
@@ -534,6 +537,8 @@ local function networkLoop()
 
     if type(msg) == "table" then
       if msg.type == "storage_status" then
+        local prev = nodes[msg.node]
+        local prevExport = prev and prev.latestExport
         nodes[msg.node] = {
           app          = "storage",
           label        = msg.label or msg.node,
@@ -543,9 +548,13 @@ local function networkLoop()
           latestExport = msg.latestExport or "none",
           alarm        = false,
         }
-        addLog("storage " .. tostring(msg.node) .. " updated")
+        -- Only log first time or on export change
+        if not prev or prevExport ~= (msg.latestExport or "none") then
+          addLog("storage " .. tostring(msg.node) .. " updated")
+        end
 
       elseif msg.type == "tank_status" then
+        local prev = nodes[msg.node]
         nodes[msg.node] = {
           app      = "tank",
           label    = msg.label or msg.node,
@@ -558,9 +567,16 @@ local function networkLoop()
           level    = msg.level,
           alarm    = msg.alarm,
         }
-        addLog("tank " .. tostring(msg.node) .. " " .. tostring(msg.percent) .. "%")
+        -- Only log on alarm state change or first seen
+        if not prev then
+          addLog("tank " .. tostring(msg.node) .. " online")
+        elseif (msg.alarm) ~= (prev and prev.alarm) then
+          addLog("tank " .. tostring(msg.node) .. " alarm:" .. tostring(msg.alarm))
+        end
 
       elseif msg.type == "train_status" then
+        local prev = nodes[msg.node]
+        local wasPresent = prev and prev.present
         nodes[msg.node] = {
           app              = "train",
           label            = msg.label or msg.node,
@@ -580,7 +596,10 @@ local function networkLoop()
           scheduleTotal    = msg.scheduleTotal,
           alarm            = msg.alarm,
         }
-        addLog("train " .. tostring(msg.node) .. " " .. (msg.present and "present" or "empty"))
+        -- Only log on presence state change
+        if msg.present ~= wasPresent then
+          addLog("train " .. tostring(msg.node) .. " " .. (msg.present and "ARRIVED" or "DEPARTED"))
+        end
 
       elseif msg.type == "alarm" then
         addAlarm(tostring(msg.node) .. ": " .. tostring(msg.message))
