@@ -6,8 +6,7 @@ local CONFIG = {
   address = "Trash",
   refreshRate = 2,
   requestCooldown = 3,
-  maxBatch = 1000,
-  modemChannel = 777
+  maxBatch = 1000
 }
 
 -- =========================================================
@@ -15,17 +14,26 @@ local CONFIG = {
 -- =========================================================
 
 local stock = peripheral.find("Create_StockTicker")
-local depot = peripheral.find("inventory")
-local modem = peripheral.find("modem", function(_, m)
-  return m.isWireless()
-end)
+local depot = peripheral.find("create:depot")
+
+local modem = peripheral.find(
+  "modem",
+  function(_, m)
+
+    local ok, wireless = pcall(function()
+      return m.isWireless()
+    end)
+
+    return ok and wireless
+  end
+)
 
 if not stock then
   error("No Stock Ticker found")
 end
 
 if not depot then
-  error("No depot/container found")
+  error("No Create Depot found")
 end
 
 if modem then
@@ -33,14 +41,18 @@ if modem then
 end
 
 -- =========================================================
---  Policies
+--  Data directory
 -- =========================================================
-
-local POLICY_FILE = "/data/policies.json"
 
 if not fs.exists("/data") then
   fs.makeDir("/data")
 end
+
+-- =========================================================
+--  Policies
+-- =========================================================
+
+local POLICY_FILE = "/data/policies.json"
 
 local policies = {}
 
@@ -52,13 +64,16 @@ local function loadPolicies()
 
   local f = fs.open(POLICY_FILE, "r")
 
-  local data = f.readAll()
+  local raw = f.readAll()
 
   f.close()
 
-  policies =
-    textutils.unserializeJSON(data)
-    or {}
+  local data =
+    textutils.unserializeJSON(raw)
+
+  if type(data) == "table" then
+    policies = data
+  end
 end
 
 local function savePolicies()
@@ -77,6 +92,13 @@ loadPolicies()
 -- =========================================================
 --  Helpers
 -- =========================================================
+
+local function log(text, color)
+
+  term.setTextColor(color or colors.white)
+
+  print(text)
+end
 
 local function getStockMap()
 
@@ -99,9 +121,17 @@ end
 
 local function getDepotItem()
 
-  local item = depot.getItemDetail(1)
+  if not depot then
+    return nil
+  end
 
-  if not item then
+  local ok, item = pcall(function()
+
+    return depot.getItemDetail(1)
+
+  end)
+
+  if not ok or not item then
     return nil
   end
 
@@ -172,6 +202,27 @@ local function configLoop()
         print("")
         print("Saved.")
 
+        -- =============================================
+        --  Broadcast policy update
+        -- =============================================
+
+        if modem then
+
+          rednet.broadcast({
+
+            type = "storage_policy",
+
+            node =
+              os.getComputerLabel()
+              or tostring(os.getComputerID()),
+
+            item = item,
+
+            limit = limit
+
+          }, "factoryos")
+        end
+
       else
 
         term.setTextColor(colors.red)
@@ -192,7 +243,7 @@ local function configLoop()
 end
 
 -- =========================================================
---  Overflow Logic
+--  Overflow Export
 -- =========================================================
 
 local lastRequest = -999
@@ -201,14 +252,15 @@ local function exportLoop()
 
   while true do
 
-    local map = getStockMap()
+    local stockMap = getStockMap()
 
     local selectedItem = nil
     local biggestOverflow = 0
 
     for item, cfg in pairs(policies) do
 
-      local current = map[item] or 0
+      local current =
+        stockMap[item] or 0
 
       local overflow =
         current - cfg.limit
@@ -232,7 +284,7 @@ local function exportLoop()
             CONFIG.maxBatch
           )
 
-        pcall(function()
+        local ok, err = pcall(function()
 
           stock.requestFiltered(
             CONFIG.address,
@@ -242,18 +294,32 @@ local function exportLoop()
             }
           )
 
+        end)
+
+        if ok then
+
           lastRequest = os.clock()
 
-          -- =================================================
+          log(
+            "[EXPORT] "
+            .. amount
+            .. " "
+            .. selectedItem,
+            colors.lime
+          )
+
+          -- =========================================
           --  Broadcast telemetry
-          -- =================================================
+          -- =========================================
 
           if modem then
 
             rednet.broadcast({
+
               type = "storage_update",
 
-              node = os.getComputerLabel()
+              node =
+                os.getComputerLabel()
                 or tostring(os.getComputerID()),
 
               item = selectedItem,
@@ -261,15 +327,62 @@ local function exportLoop()
               amount = amount,
 
               overflow = biggestOverflow
+
             }, "factoryos")
           end
-        end)
+
+        else
+
+          log(
+            "[ERROR] " .. tostring(err),
+            colors.red
+          )
+        end
       end
     end
 
     sleep(CONFIG.refreshRate)
   end
 end
+
+-- =========================================================
+--  Boot
+-- =========================================================
+
+term.setBackgroundColor(colors.black)
+term.clear()
+term.setCursorPos(1,1)
+
+term.setTextColor(colors.orange)
+
+print("================================")
+print("      FACTORY OS STORAGE")
+print("================================")
+print("")
+
+term.setTextColor(colors.lime)
+
+print("Storage node online")
+
+term.setTextColor(colors.lightGray)
+
+print("")
+print("Policies: " .. tostring(
+  (function()
+
+    local c = 0
+
+    for _ in pairs(policies) do
+      c = c + 1
+    end
+
+    return c
+
+  end)()
+))
+
+print("")
+print("Waiting for depot input...")
 
 -- =========================================================
 --  Main

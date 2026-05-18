@@ -182,11 +182,11 @@ log("BOOT", "Launching app")
 
 sleep(1)
 
-local ok, err = pcall(function()
+local ok, err = xpcall(function()
 
   shell.run(APP_PATH)
 
-end)
+end, debug.traceback)
 
 if not ok then
 
