@@ -34,17 +34,22 @@ local nodeName =
 local _, wirelessSide = wireless.find()
 
 -- Discover boiler peripherals on the wired network.
--- Create mod exposes boiler valves as "create:fluid_tank" (or "create_fluid_tank").
--- Fall back to checking for getTemperature() for other integrations.
+-- Accepts:
+--   create:fluid_tank   – Create fluid reservoir (lava supply)
+--   any type with "boiler" in the name – CC:C Bridge boiler status target
+--   getTemperature()    – generic fallback (boiler valve)
+--   getWaterAmount()    – CC:C Bridge boiler target fallback
 local boilers = {}
 
 for _, name in ipairs(peripheral.getNames()) do
   local pType = peripheral.getType(name)
   local p     = peripheral.wrap(name)
   if type(p) == "table" then
-    local isFluidTank = pType and pType:find("fluid_tank") ~= nil
-    local hasTemp     = type(p.getTemperature) == "function"
-    if isFluidTank or hasTemp then
+    local isFluidTank  = pType and pType:find("fluid_tank")    ~= nil
+    local isBoilerType = pType and pType:lower():find("boiler") ~= nil
+    local hasTemp      = type(p.getTemperature)  == "function"
+    local hasBridge    = type(p.getWaterAmount)  == "function"
+    if isFluidTank or isBoilerType or hasTemp or hasBridge then
       table.insert(boilers, { name = name, p = p })
     end
   end
@@ -128,52 +133,121 @@ local function pct(amount, capacity)
   return math.floor((amount / capacity) * 100)
 end
 
+-- Try to read boiler data from a CC:C Bridge boiler status target.
+-- Probes the direct getWaterAmount / getSteamAmount / getTemperature methods
+-- that CC:C Bridge exposes when the target block is a Create steam boiler.
+-- Returns a data table if the peripheral supports it, otherwise nil.
+local function readFromCCBridge(p)
+  if type(p.getWaterAmount) ~= "function" then return nil end
+
+  local function safe(method, fallback)
+    if type(p[method]) ~= "function" then return fallback end
+    local ok, v = pcall(function() return p[method]() end)
+    return (ok and type(v) == "number") and v or fallback
+  end
+
+  local waterAmount = safe("getWaterAmount",    0)
+  local waterCap    = safe("getWaterCapacity",  0)
+  -- some CC:C Bridge versions use getMaxWaterAmount instead
+  if waterCap == 0 then waterCap = safe("getMaxWaterAmount", CONFIG.capacityFallback) end
+
+  local steamAmount = safe("getSteamAmount",    0)
+  local steamCap    = safe("getSteamCapacity",  0)
+  if steamCap == 0 then steamCap = safe("getMaxSteamAmount", CONFIG.capacityFallback) end
+
+  local temp    = safe("getTemperature",    0)
+  local maxTemp = safe("getMaxTemperature", 0)
+  if maxTemp == 0 then maxTemp = 1000 end
+
+  return {
+    waterAmount = waterAmount,
+    waterCap    = waterCap,
+    steamAmount = steamAmount,
+    steamCap    = steamCap,
+    temp        = temp,
+    maxTemp     = maxTemp,
+  }
+end
+
 local function readAllBoilers()
   local newStates = {}
 
   for i, b in ipairs(boilers) do
     local p = b.p
 
-    -- ── Read all fluid slots, classify by fluid name ──────────────────
-    local allSlots = {}
-    if type(p.getFluidInTank) == "function" then
-      local count = 1
-      if type(p.getTankCount) == "function" then
-        local ok, n = pcall(function() return p.getTankCount() end)
-        if ok and type(n) == "number" and n > 0 then count = n end
+    -- ── Try CC:C Bridge boiler target first ──────────────────────────
+    local bridge = readFromCCBridge(p)
+
+    local temp, maxTemp, tempPercent
+    local hasWater, hasLava
+    local waterAmount, waterCap, waterPct
+    local steamAmount, steamCap, steamPct
+    local lavaAmount,  lavaCap,  lavaPct
+
+    if bridge then
+      -- CC:C Bridge gives us proper water + steam + temperature directly
+      temp        = bridge.temp
+      maxTemp     = bridge.maxTemp
+      waterAmount = bridge.waterAmount
+      waterCap    = bridge.waterCap
+      steamAmount = bridge.steamAmount
+      steamCap    = bridge.steamCap
+      lavaAmount, lavaCap = 0, CONFIG.capacityFallback
+      hasWater = waterCap > 0
+      hasLava  = false
+      waterPct = pct(waterAmount, waterCap)
+      steamPct = pct(steamAmount, steamCap)
+      lavaPct  = 0
+    else
+      -- ── Fall back: classify fluid slots by name ───────────────────
+      local allSlots = {}
+      if type(p.getFluidInTank) == "function" then
+        local count = 1
+        if type(p.getTankCount) == "function" then
+          local ok, n = pcall(function() return p.getTankCount() end)
+          if ok and type(n) == "number" and n > 0 then count = n end
+        end
+        for idx = 0, count - 1 do
+          local slot = readTankSlot(p, idx)
+          if slot then table.insert(allSlots, slot) end
+        end
       end
-      for idx = 0, count - 1 do
-        local slot = readTankSlot(p, idx)
-        if slot then table.insert(allSlots, slot) end
+
+      local waterSlot, steamSlot, lavaSlot
+      for _, slot in ipairs(allSlots) do
+        local nm = (slot.name or ""):lower()
+        if     not waterSlot and nm:find("water") then waterSlot = slot
+        elseif not steamSlot and nm:find("steam") then steamSlot = slot
+        elseif not lavaSlot  and nm:find("lava")  then lavaSlot  = slot
+        end
       end
+
+      -- Temperature via peripheral method
+      temp    = 0
+      maxTemp = 1000
+      if type(p.getTemperature) == "function" then
+        local ok, t = pcall(function() return p.getTemperature() end)
+        if ok and type(t) == "number" then temp = t end
+      end
+      if type(p.getMaxTemperature) == "function" then
+        local ok, m = pcall(function() return p.getMaxTemperature() end)
+        if ok and type(m) == "number" and m > 0 then maxTemp = m end
+      end
+
+      hasWater    = waterSlot ~= nil
+      hasLava     = lavaSlot  ~= nil
+      waterAmount = waterSlot and waterSlot.amount   or 0
+      waterCap    = waterSlot and waterSlot.capacity or CONFIG.capacityFallback
+      steamAmount = steamSlot and steamSlot.amount   or 0
+      steamCap    = steamSlot and steamSlot.capacity or CONFIG.capacityFallback
+      lavaAmount  = lavaSlot  and lavaSlot.amount    or 0
+      lavaCap     = lavaSlot  and lavaSlot.capacity  or CONFIG.capacityFallback
+      waterPct    = pct(waterAmount, waterCap)
+      steamPct    = pct(steamAmount, steamCap)
+      lavaPct     = pct(lavaAmount,  lavaCap)
     end
 
-    local waterSlot, steamSlot, lavaSlot
-    for _, slot in ipairs(allSlots) do
-      local nm = (slot.name or ""):lower()
-      if     not waterSlot and nm:find("water") then waterSlot = slot
-      elseif not steamSlot and nm:find("steam") then steamSlot = slot
-      elseif not lavaSlot  and nm:find("lava")  then lavaSlot  = slot
-      end
-    end
-
-    -- ── Temperature ───────────────────────────────────────────────────
-    local temp    = 0
-    local maxTemp = 1000
-    if type(p.getTemperature) == "function" then
-      local ok, t = pcall(function() return p.getTemperature() end)
-      if ok and type(t) == "number" then temp = t end
-    end
-    if type(p.getMaxTemperature) == "function" then
-      local ok, m = pcall(function() return p.getMaxTemperature() end)
-      if ok and type(m) == "number" and m > 0 then maxTemp = m end
-    end
-    local tempPercent = pct(temp, maxTemp)
-
-    -- ── Per-fluid percentages ─────────────────────────────────────────
-    local waterPct = waterSlot and pct(waterSlot.amount, waterSlot.capacity) or 0
-    local steamPct = steamSlot and pct(steamSlot.amount, steamSlot.capacity) or 0
-    local lavaPct  = lavaSlot  and pct(lavaSlot.amount,  lavaSlot.capacity)  or 0
+    tempPercent = pct(temp, maxTemp)
 
     -- ── Heat level (optional) ─────────────────────────────────────────
     local heatLevel
@@ -184,8 +258,6 @@ local function readAllBoilers()
 
     -- ── Status classification ─────────────────────────────────────────
     -- Only raise fluid alarms for fluids that are actually present.
-    local hasWater = waterSlot ~= nil
-    local hasLava  = lavaSlot  ~= nil
     local status, alarm
 
     if hasLava and not hasWater and lavaPct <= CONFIG.waterLowPercent then
@@ -210,15 +282,15 @@ local function readAllBoilers()
       tempPercent = tempPercent,
       hasWater    = hasWater,
       waterPct    = waterPct,
-      waterAmount = waterSlot and waterSlot.amount   or 0,
-      waterCap    = waterSlot and waterSlot.capacity or CONFIG.capacityFallback,
+      waterAmount = waterAmount,
+      waterCap    = waterCap,
       hasLava     = hasLava,
       lavaPct     = lavaPct,
-      lavaAmount  = lavaSlot and lavaSlot.amount   or 0,
-      lavaCap     = lavaSlot and lavaSlot.capacity or CONFIG.capacityFallback,
+      lavaAmount  = lavaAmount,
+      lavaCap     = lavaCap,
       steamPct    = steamPct,
-      steamAmount = steamSlot and steamSlot.amount   or 0,
-      steamCap    = steamSlot and steamSlot.capacity or CONFIG.capacityFallback,
+      steamAmount = steamAmount,
+      steamCap    = steamCap,
       heatLevel   = heatLevel,
       status      = status,
       alarm       = alarm,
