@@ -1,5 +1,5 @@
 -- =========================================================
---  Factory OS SCADA v1.3
+--  Factory OS SCADA v1.4
 -- =========================================================
 
 local monitors = {
@@ -66,7 +66,13 @@ local function led(mon,x,y,color,on)
   mon.setBackgroundColor(colors.black)
 end
 
-local function statusLine(mon,y,color,text,on)
+local function statusLine(
+  mon,
+  y,
+  color,
+  text,
+  on
+)
 
   led(mon,3,y,color,on)
 
@@ -98,6 +104,8 @@ local function drawMain(mon, heartbeat)
 
   local w,h = mon.getSize()
 
+  -- Header
+
   paintutils.drawFilledBox(
     1,1,w,2,
     colors.orange
@@ -106,13 +114,15 @@ local function drawMain(mon, heartbeat)
   center(
     mon,
     1,
-    "Factory OS SCADA v1.3",
+    "Factory OS SCADA v1.4",
     colors.black
   )
 
+  -- Status
+
   statusLine(
     mon,
-    4,
+    5,
     colors.lime,
     "Heartbeat",
     heartbeat
@@ -120,7 +130,7 @@ local function drawMain(mon, heartbeat)
 
   statusLine(
     mon,
-    5,
+    7,
     colors.cyan,
     "Wireless",
     modem ~= nil
@@ -128,36 +138,42 @@ local function drawMain(mon, heartbeat)
 
   statusLine(
     mon,
-    6,
+    9,
     colors.orange,
     "Storage Network",
     true
   )
 
+  -- Node
+
   mon.setTextColor(colors.white)
 
-  mon.setCursorPos(3,9)
+  mon.setCursorPos(3,12)
   mon.write("Node:")
 
   mon.setTextColor(colors.lightGray)
   mon.write(" " .. latest.node)
 
-  mon.setCursorPos(3,11)
+  -- Export
+
+  mon.setCursorPos(3,14)
 
   mon.setTextColor(colors.white)
   mon.write("Latest Export:")
 
-  mon.setTextColor(colors.orange)
+  mon.setCursorPos(3,15)
 
-  mon.setCursorPos(3,12)
+  mon.setTextColor(colors.orange)
   mon.write(latest.latestExport)
+
+  -- Items
 
   mon.setTextColor(colors.cyan)
 
-  mon.setCursorPos(3,15)
+  mon.setCursorPos(3,18)
   mon.write("Monitored Items")
 
-  local y = 17
+  local y = 20
 
   for _, item in ipairs(latest.items) do
 
@@ -208,9 +224,16 @@ local function drawTiny(mon, heartbeat)
 
   clear(mon)
 
+  center(
+    mon,
+    1,
+    "Factory OS",
+    colors.orange
+  )
+
   statusLine(
     mon,
-    2,
+    3,
     colors.lime,
     "HB",
     heartbeat
@@ -218,7 +241,7 @@ local function drawTiny(mon, heartbeat)
 
   statusLine(
     mon,
-    4,
+    5,
     colors.cyan,
     "NET",
     modem ~= nil
@@ -226,7 +249,7 @@ local function drawTiny(mon, heartbeat)
 
   statusLine(
     mon,
-    6,
+    7,
     colors.orange,
     "STR",
     true
@@ -241,7 +264,7 @@ local function networkLoop()
 
   while true do
 
-    local _, msg, protocol =
+    local _, msg =
       rednet.receive("factoryos")
 
     if type(msg) == "table" then
