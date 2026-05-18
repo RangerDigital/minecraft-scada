@@ -57,16 +57,6 @@ local function networkLoop()
           level    = msg.level,
           alarm    = msg.alarm,
         }
-      elseif msg.type == "boiler_status" then
-        nodes[msg.node] = {
-          app         = "boiler",
-          lastSeen    = os.epoch("utc"),
-          tempPercent = msg.tempPercent or 0,
-          waterPct    = msg.waterPct    or 0,
-          steamPct    = msg.steamPct    or 0,
-          status      = msg.status      or "?",
-          alarm       = msg.alarm,
-        }
       elseif msg.type == "alarm" then
         addAlarm(tostring(msg.node) .. " " .. tostring(msg.message))
       end
@@ -204,18 +194,6 @@ local function drawUI(heartbeat)
       term.setTextColor(barColor)
       term.write(string.format("%3d%%", pct))
 
-    elseif node.app == "boiler" then
-      local sc = (alm or node.status == "WATER_LOW")  and colors.red
-              or (node.status == "WARMING"
-               or node.status == "STEAM_HIGH")         and colors.yellow
-              or colors.lime
-      term.setCursorPos(12, y)
-      term.setTextColor(sc)
-      term.write(string.format("W%2d S%2d T%2d%%",
-        node.waterPct    or 0,
-        node.steamPct    or 0,
-        node.tempPercent or 0))
-
     elseif node.app == "storage" then
       local overflow = 0
       for _, item in ipairs(node.items or {}) do
@@ -242,7 +220,7 @@ local function drawUI(heartbeat)
   if y <= H then
     term.setCursorPos(1, H)
     term.setTextColor(colors.gray)
-    term.write(("─"):rep(W))
+    term.write(("-"):rep(W))
   end
 end
 
