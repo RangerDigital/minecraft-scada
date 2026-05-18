@@ -526,15 +526,21 @@ local function drawPlantB(mon, heartbeat)
       return
     end
 
-    local sc = (alm or node.status == "WATER_LOW")  and colors.red
+    local sc = (alm
+             or node.status == "WATER_LOW"
+             or node.status == "LAVA_LOW")  and colors.red
             or (node.status == "WARMING"
-             or node.status == "STEAM_HIGH")         and colors.yellow
+             or node.status == "STEAM_HIGH") and colors.yellow
             or colors.lime
 
     if y + 1 <= h then
       mon.setCursorPos(colX, y + 1)
       mon.setTextColor(sc)
-      mon.write(string.format("T:%3d%% W:%3d%%", node.tempPercent or 0, node.waterPct or 0))
+      -- show lava % if present, otherwise water %; always show temp
+      local fluidLabel = node.hasLava and ("L:" .. string.format("%3d", node.lavaPct) .. "%")
+                      or node.hasWater and ("W:" .. string.format("%3d", node.waterPct) .. "%")
+                      or "         "
+      mon.write(fluidLabel .. string.format(" T:%3d%%", node.tempPercent or 0))
     end
     if y + 2 <= h then
       mon.setCursorPos(colX, y + 2)
@@ -614,12 +620,15 @@ local function networkLoop()
           app         = "boiler",
           lastSeen    = os.epoch("utc"),
           tempPercent = msg.tempPercent or 0,
+          hasWater    = msg.hasWater,
           waterPct    = msg.waterPct    or 0,
+          hasLava     = msg.hasLava,
+          lavaPct     = msg.lavaPct     or 0,
           steamPct    = msg.steamPct    or 0,
           status      = msg.status      or "?",
           alarm       = msg.alarm,
         }
-        addLog("boiler " .. tostring(msg.node) .. " T:" .. tostring(msg.tempPercent) .. "%")
+        addLog("boiler " .. tostring(msg.node) .. " " .. tostring(msg.status or "?"))
 
       elseif msg.type == "alarm" then
         addAlarm(tostring(msg.node) .. ": " .. tostring(msg.message))

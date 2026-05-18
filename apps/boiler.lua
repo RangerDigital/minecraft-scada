@@ -101,7 +101,7 @@ end
 --  Boiler reading helpers
 -- =========================================================
 
--- Try to read a fluid tank at `index` (0-based) from peripheral p.
+-- Read one fluid slot (0-based) from a peripheral.
 -- Returns { name, amount, capacity } or nil.
 local function readTankSlot(p, index)
   if type(p.getFluidInTank) ~= "function" then return nil end
@@ -122,7 +122,7 @@ local function readTankSlot(p, index)
   }
 end
 
--- Percentage helper (0–100, integer)
+-- Percentage helper (0-100, integer)
 local function pct(amount, capacity)
   if capacity <= 0 then return 0 end
   return math.floor((amount / capacity) * 100)
@@ -134,62 +134,72 @@ local function readAllBoilers()
   for i, b in ipairs(boilers) do
     local p = b.p
 
-    -- Temperature (0 .. maxTemp)
+    -- ── Read all fluid slots, classify by fluid name ──────────────────
+    local allSlots = {}
+    if type(p.getFluidInTank) == "function" then
+      local count = 1
+      if type(p.getTankCount) == "function" then
+        local ok, n = pcall(function() return p.getTankCount() end)
+        if ok and type(n) == "number" and n > 0 then count = n end
+      end
+      for idx = 0, count - 1 do
+        local slot = readTankSlot(p, idx)
+        if slot then table.insert(allSlots, slot) end
+      end
+    end
+
+    local waterSlot, steamSlot, lavaSlot
+    for _, slot in ipairs(allSlots) do
+      local nm = (slot.name or ""):lower()
+      if     not waterSlot and nm:find("water") then waterSlot = slot
+      elseif not steamSlot and nm:find("steam") then steamSlot = slot
+      elseif not lavaSlot  and nm:find("lava")  then lavaSlot  = slot
+      end
+    end
+
+    -- ── Temperature ───────────────────────────────────────────────────
     local temp    = 0
-    local maxTemp = 1000  -- Create high-pressure default
-    local ok
-
+    local maxTemp = 1000
     if type(p.getTemperature) == "function" then
-      ok, temp = pcall(function() return p.getTemperature() end)
-      if not ok or type(temp) ~= "number" then temp = 0 end
+      local ok, t = pcall(function() return p.getTemperature() end)
+      if ok and type(t) == "number" then temp = t end
     end
-
     if type(p.getMaxTemperature) == "function" then
-      local mOk, m = pcall(function() return p.getMaxTemperature() end)
-      if mOk and type(m) == "number" and m > 0 then maxTemp = m end
+      local ok, m = pcall(function() return p.getMaxTemperature() end)
+      if ok and type(m) == "number" and m > 0 then maxTemp = m end
     end
-
     local tempPercent = pct(temp, maxTemp)
 
-    -- Water tank (slot 0) and steam tank (slot 1) via CC:C Bridge or similar
-    local waterPct, steamPct = 0, 0
-    local waterAmount, waterCap = 0, CONFIG.capacityFallback
-    local steamAmount, steamCap = 0, CONFIG.capacityFallback
+    -- ── Per-fluid percentages ─────────────────────────────────────────
+    local waterPct = waterSlot and pct(waterSlot.amount, waterSlot.capacity) or 0
+    local steamPct = steamSlot and pct(steamSlot.amount, steamSlot.capacity) or 0
+    local lavaPct  = lavaSlot  and pct(lavaSlot.amount,  lavaSlot.capacity)  or 0
 
-    local waterSlot = readTankSlot(p, 0)
-    if waterSlot then
-      waterAmount = waterSlot.amount
-      waterCap    = waterSlot.capacity
-      waterPct    = pct(waterAmount, waterCap)
-    end
-
-    local steamSlot = readTankSlot(p, 1)
-    if steamSlot then
-      steamAmount = steamSlot.amount
-      steamCap    = steamSlot.capacity
-      steamPct    = pct(steamAmount, steamCap)
-    end
-
-    -- Heat level (optional — some integrations expose this)
-    local heatLevel = nil
+    -- ── Heat level (optional) ─────────────────────────────────────────
+    local heatLevel
     if type(p.getHeatLevel) == "function" then
-      local hOk, h = pcall(function() return p.getHeatLevel() end)
-      if hOk and type(h) == "number" then heatLevel = h end
+      local ok, h = pcall(function() return p.getHeatLevel() end)
+      if ok and type(h) == "number" then heatLevel = h end
     end
 
-    -- Status classification
+    -- ── Status classification ─────────────────────────────────────────
+    -- Only raise fluid alarms for fluids that are actually present.
+    local hasWater = waterSlot ~= nil
+    local hasLava  = lavaSlot  ~= nil
     local status, alarm
 
-    if waterPct <= CONFIG.waterLowPercent then
-      status = "WATER_LOW"; alarm = true
+    if hasLava and not hasWater and lavaPct <= CONFIG.waterLowPercent then
+      status = "LAVA_LOW";   alarm = true
+    elseif hasWater and waterPct <= CONFIG.waterLowPercent then
+      status = "WATER_LOW";  alarm = true
     elseif steamPct >= CONFIG.steamHighPercent then
       status = "STEAM_HIGH"; alarm = true
-    elseif tempPercent < CONFIG.tempWarmPercent then
-      status = "WARMING"; alarm = false
-    elseif waterPct >= CONFIG.waterHighPercent then
+    elseif tempPercent > 0 and tempPercent < CONFIG.tempWarmPercent then
+      status = "WARMING";    alarm = false
+    elseif hasWater and waterPct >= CONFIG.waterHighPercent then
       status = "WATER_FULL"; alarm = false
     else
-      status = "RUNNING"; alarm = false
+      status = "RUNNING";    alarm = false
     end
 
     table.insert(newStates, {
@@ -198,12 +208,17 @@ local function readAllBoilers()
       temp        = temp,
       maxTemp     = maxTemp,
       tempPercent = tempPercent,
+      hasWater    = hasWater,
       waterPct    = waterPct,
-      waterAmount = waterAmount,
-      waterCap    = waterCap,
+      waterAmount = waterSlot and waterSlot.amount   or 0,
+      waterCap    = waterSlot and waterSlot.capacity or CONFIG.capacityFallback,
+      hasLava     = hasLava,
+      lavaPct     = lavaPct,
+      lavaAmount  = lavaSlot and lavaSlot.amount   or 0,
+      lavaCap     = lavaSlot and lavaSlot.capacity or CONFIG.capacityFallback,
       steamPct    = steamPct,
-      steamAmount = steamAmount,
-      steamCap    = steamCap,
+      steamAmount = steamSlot and steamSlot.amount   or 0,
+      steamCap    = steamSlot and steamSlot.capacity or CONFIG.capacityFallback,
       heatLevel   = heatLevel,
       status      = status,
       alarm       = alarm,
@@ -229,9 +244,14 @@ local function broadcastStatus()
       temp        = s.temp,
       maxTemp     = s.maxTemp,
       tempPercent = s.tempPercent,
+      hasWater    = s.hasWater,
       waterPct    = s.waterPct,
       waterAmount = s.waterAmount,
       waterCap    = s.waterCap,
+      hasLava     = s.hasLava,
+      lavaPct     = s.lavaPct,
+      lavaAmount  = s.lavaAmount,
+      lavaCap     = s.lavaCap,
       steamPct    = s.steamPct,
       steamAmount = s.steamAmount,
       steamCap    = s.steamCap,
@@ -268,8 +288,12 @@ local function drawDisplayLinks()
       local y = 2
       for _, s in ipairs(boilerStates) do
         d.setCursorPos(1, y)
-        d.write("W:" .. s.waterPct .. "% S:" .. s.steamPct
-                .. "% T:" .. s.tempPercent .. "%")
+        local parts = {}
+        if s.hasLava  then parts[#parts+1] = "L:" .. s.lavaPct  .. "%" end
+        if s.hasWater then parts[#parts+1] = "W:" .. s.waterPct .. "%" end
+        if s.steamPct > 0 then parts[#parts+1] = "S:" .. s.steamPct .. "%" end
+        if s.tempPercent > 0 then parts[#parts+1] = "T:" .. s.tempPercent .. "%" end
+        d.write(table.concat(parts, " "))
         y = y + 1
       end
 
@@ -327,10 +351,18 @@ local function drawTerminal()
     print("Status: " .. s.status)
 
     term.setTextColor(colors.gray)
-    print("Temp:  " .. s.temp .. " / " .. s.maxTemp .. " (" .. s.tempPercent .. "%)")
-    print("Water: " .. s.waterAmount .. " / " .. s.waterCap .. " mB (" .. s.waterPct .. "%)")
-    print("Steam: " .. s.steamAmount .. " / " .. s.steamCap .. " mB (" .. s.steamPct .. "%)")
-
+    if s.tempPercent > 0 then
+      print("Temp:  " .. s.temp .. " / " .. s.maxTemp .. " (" .. s.tempPercent .. "%)")
+    end
+    if s.hasLava then
+      print("Lava:  " .. s.lavaAmount .. " / " .. s.lavaCap .. " mB (" .. s.lavaPct .. "%)")
+    end
+    if s.hasWater then
+      print("Water: " .. s.waterAmount .. " / " .. s.waterCap .. " mB (" .. s.waterPct .. "%)")
+    end
+    if s.steamPct > 0 then
+      print("Steam: " .. s.steamAmount .. " / " .. s.steamCap .. " mB (" .. s.steamPct .. "%)")
+    end
     if s.heatLevel then
       print("Heat:  " .. s.heatLevel)
     end
