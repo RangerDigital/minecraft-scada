@@ -1,5 +1,5 @@
 -- =========================================================
---  Factory OS SCADA Test
+--  Factory OS SCADA
 -- =========================================================
 
 local monitors = {
@@ -33,6 +33,13 @@ local latest = {
 --  Helpers
 -- =========================================================
 
+local function clear(mon)
+
+  mon.setBackgroundColor(colors.black)
+  mon.clear()
+  mon.setCursorPos(1,1)
+end
+
 local function center(mon, y, text, color)
 
   local w,h = mon.getSize()
@@ -47,42 +54,32 @@ local function center(mon, y, text, color)
   mon.write(text)
 end
 
-local function clear(mon)
-
-  mon.setBackgroundColor(colors.black)
-  mon.clear()
-  mon.setCursorPos(1,1)
-end
-
-local function led(mon, x, y, color, on)
-
-  if on then
-    mon.setBackgroundColor(color)
-  else
-    mon.setBackgroundColor(colors.gray)
-  end
+local function led(mon,x,y,color,on)
 
   mon.setCursorPos(x,y)
+
+  mon.setBackgroundColor(
+    on and color or colors.gray
+  )
+
   mon.write(" ")
 
   mon.setBackgroundColor(colors.black)
 end
 
 -- =========================================================
---  Configure monitors
+--  Configure
 -- =========================================================
 
 for _, mon in ipairs(monitors) do
 
   pcall(function()
-
     mon.setTextScale(0.5)
-
   end)
 end
 
 -- =========================================================
---  Main monitor
+--  Main Display
 -- =========================================================
 
 local function drawMain(mon, heartbeat)
@@ -106,7 +103,7 @@ local function drawMain(mon, heartbeat)
   center(
     mon,
     6,
-    "SCADA TELEMETRY",
+    "STORAGE NETWORK",
     colors.cyan
   )
 
@@ -129,7 +126,7 @@ local function drawMain(mon, heartbeat)
   mon.setCursorPos(3,13)
 
   mon.setTextColor(colors.white)
-  mon.write("Batch:")
+  mon.write("Export:")
 
   mon.setTextColor(colors.lime)
   mon.write(" " .. latest.amount)
@@ -142,46 +139,28 @@ local function drawMain(mon, heartbeat)
   mon.setTextColor(colors.red)
   mon.write(" +" .. latest.overflow)
 
-  -- status leds
+  -- status
 
   mon.setTextColor(colors.lightGray)
 
   mon.setCursorPos(3,19)
   mon.write("Heartbeat")
 
-  led(
-    mon,
-    16,
-    19,
-    colors.lime,
-    heartbeat
-  )
+  led(mon,16,19,colors.lime,heartbeat)
 
   mon.setCursorPos(3,21)
   mon.write("Wireless")
 
-  led(
-    mon,
-    16,
-    21,
-    modem and colors.cyan or colors.red,
-    heartbeat
-  )
+  led(mon,16,21,colors.cyan,modem)
 
   mon.setCursorPos(3,23)
-  mon.write("Monitors")
+  mon.write("Storage")
 
-  led(
-    mon,
-    16,
-    23,
-    colors.orange,
-    true
-  )
+  led(mon,16,23,colors.orange,true)
 end
 
 -- =========================================================
---  Tiny monitor
+--  Tiny Monitor
 -- =========================================================
 
 local function drawTiny(mon, heartbeat)
@@ -192,40 +171,24 @@ local function drawTiny(mon, heartbeat)
 
   paintutils.drawFilledBox(
     1,1,w,h,
-    colors.gray
+    colors.black
   )
 
-  local centerX = math.floor(w/2)
+  mon.setCursorPos(2,2)
+  mon.setTextColor(colors.lightGray)
+  mon.write("HB")
 
-  led(
-    mon,
-    centerX,
-    3,
-    colors.lime,
-    heartbeat
-  )
+  led(mon,5,2,colors.lime,heartbeat)
 
-  led(
-    mon,
-    centerX,
-    6,
-    modem and colors.cyan or colors.red,
-    heartbeat
-  )
+  mon.setCursorPos(2,4)
+  mon.write("NET")
 
-  led(
-    mon,
-    centerX,
-    9,
-    colors.orange,
-    true
-  )
+  led(mon,6,4,colors.cyan,modem)
 
-  mon.setTextColor(colors.black)
+  mon.setCursorPos(2,6)
+  mon.write("STR")
 
-  center(mon, 2, "HB", colors.black)
-  center(mon, 5, "NET", colors.black)
-  center(mon, 8, "MON", colors.black)
+  led(mon,6,6,colors.orange,true)
 end
 
 -- =========================================================
@@ -236,7 +199,7 @@ local function networkLoop()
 
   while true do
 
-    local id, msg, protocol =
+    local _, msg, protocol =
       rednet.receive("factoryos")
 
     if type(msg) == "table" then
