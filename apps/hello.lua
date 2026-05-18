@@ -1,43 +1,130 @@
 -- =========================================================
---  Factory OS Hello
+--  Factory OS - Monitor Discovery
 -- =========================================================
 
 term.setBackgroundColor(colors.black)
 term.clear()
 
-local w, h = term.getSize()
+-- =========================================================
+--  Helpers
+-- =========================================================
 
-local function center(y, text, color)
+local function center(mon, y, text, color)
 
-  term.setTextColor(color or colors.white)
+  local w, h = mon.getSize()
 
-  term.setCursorPos(
+  mon.setTextColor(color or colors.white)
+
+  mon.setCursorPos(
     math.floor((w - #text) / 2),
     y
   )
 
-  write(text)
+  mon.write(text)
 end
 
-paintutils.drawFilledBox(1,1,w,3,colors.gray)
+local function clear(mon)
 
-center(2, "FACTORY OS", colors.black)
+  mon.setBackgroundColor(colors.black)
+  mon.clear()
+  mon.setCursorPos(1,1)
+end
 
-center(6, "HELLO WORLD", colors.lime)
+-- =========================================================
+--  Find monitors
+-- =========================================================
 
-term.setTextColor(colors.lightGray)
+local monitors = { peripheral.find("monitor") }
 
-center(9, "Industrial automation runtime online")
+term.setTextColor(colors.orange)
+
+print("====================================")
+print("         FACTORY OS")
+print("====================================")
+print("")
+
+if #monitors == 0 then
+
+  term.setTextColor(colors.red)
+
+  print("No monitors found")
+
+  return
+end
+
+term.setTextColor(colors.lime)
+
+print("Detected monitors: " .. #monitors)
+
+-- =========================================================
+--  Configure + Draw
+-- =========================================================
+
+for i, mon in ipairs(monitors) do
+
+  pcall(function()
+
+    mon.setTextScale(0.5)
+
+    clear(mon)
+
+    local w, h = mon.getSize()
+
+    -- Header
+
+    paintutils.drawFilledBox(
+      1,1,w,3,
+      colors.gray
+    )
+
+    mon.setBackgroundColor(colors.gray)
+
+    center(mon, 2, "FACTORY OS", colors.black)
+
+    mon.setBackgroundColor(colors.black)
+
+    -- Main
+
+    center(mon, 6, "MONITOR #" .. i, colors.lime)
+
+    mon.setTextColor(colors.lightGray)
+
+    center(mon, 9, w .. " x " .. h)
+
+    center(mon, 11, peripheral.getName(mon))
+
+  end)
+end
+
+-- =========================================================
+--  Heartbeat
+-- =========================================================
+
+local tick = 0
 
 while true do
 
-  term.setTextColor(colors.cyan)
+  tick = tick + 1
 
-  center(
-    13,
-    "Heartbeat: " ..
-    textutils.formatTime(os.time(), true)
-  )
+  for i, mon in ipairs(monitors) do
+
+    pcall(function()
+
+      local w, h = mon.getSize()
+
+      mon.setCursorPos(2, h - 1)
+
+      mon.setTextColor(colors.cyan)
+
+      mon.clearLine()
+
+      mon.write(
+        "ONLINE  #" .. i ..
+        "  TICK " .. tick
+      )
+
+    end)
+  end
 
   sleep(1)
 end
