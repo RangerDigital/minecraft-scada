@@ -1,5 +1,5 @@
 -- =========================================================
---  Factory OS Storage Node v1.5
+--  Factory OS Storage Node v1.6
 -- =========================================================
 
 local CONFIG = {
@@ -42,35 +42,41 @@ end
 local stock = peripheral.find("Create_StockTicker")
 local depot = peripheral.find("create:depot")
 
-local modemName = nil
-
-for _, name in ipairs(peripheral.getNames()) do
-
-  if peripheral.getType(name) == "modem" then
-
-    local modem = peripheral.wrap(name)
-
-    local ok, wireless = pcall(function()
-      return modem.isWireless()
-    end)
-
-    if ok and wireless then
-      modemName = name
-      break
-    end
-  end
-end
-
-if modemName then
-  rednet.open(modemName)
-end
-
 if not stock then
   error("No Stock Ticker")
 end
 
 if not depot then
   error("No Depot")
+end
+
+-- =========================================================
+--  Wireless modem ONLY
+-- =========================================================
+
+local wirelessSide = nil
+
+for _, side in ipairs(peripheral.getNames()) do
+
+  if peripheral.getType(side) == "modem" then
+
+    local modem = peripheral.wrap(side)
+
+    local ok, wireless = pcall(function()
+      return modem.isWireless()
+    end)
+
+    if ok and wireless then
+
+      wirelessSide = side
+
+      break
+    end
+  end
+end
+
+if wirelessSide then
+  rednet.open(wirelessSide)
 end
 
 -- =========================================================
@@ -205,7 +211,7 @@ end
 
 local function broadcastStatus()
 
-  if not modemName then
+  if not wirelessSide then
     return
   end
 
@@ -219,7 +225,7 @@ local function broadcastStatus()
 
     items = buildItems(),
 
-    heartbeat = os.clock()
+    heartbeat = os.epoch("utc")
 
   }, "factoryos")
 end
@@ -234,13 +240,19 @@ local function drawStatus()
 
   term.setTextColor(colors.orange)
 
-  print("Factory OS Storage Node v1.5")
+  print("Factory OS Storage Node v1.6")
 
   print("")
 
   led(colors.lime, "Heartbeat")
   led(colors.cyan, "Wireless")
   led(colors.orange, "Overflow Export")
+
+  print("")
+
+  term.setTextColor(colors.gray)
+
+  print("Wireless: " .. tostring(wirelessSide))
 
   print("")
 
@@ -318,7 +330,7 @@ local function configLoop()
 
       term.setTextColor(colors.orange)
 
-      print("Factory OS Storage Node v1.5")
+      print("Factory OS Storage Node v1.6")
 
       print("")
 
@@ -439,7 +451,7 @@ local function exportLoop()
 end
 
 -- =========================================================
---  Heartbeat Telemetry
+--  Heartbeat
 -- =========================================================
 
 local function telemetryLoop()

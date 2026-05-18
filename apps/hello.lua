@@ -1,32 +1,38 @@
 -- =========================================================
---  Factory OS SCADA v1.5
+--  Factory OS SCADA v1.6
 -- =========================================================
 
 local monitors = {
   peripheral.find("monitor")
 }
 
-local modemName = nil
+-- =========================================================
+--  Wireless modem ONLY
+-- =========================================================
 
-for _, name in ipairs(peripheral.getNames()) do
+local wirelessSide = nil
 
-  if peripheral.getType(name) == "modem" then
+for _, side in ipairs(peripheral.getNames()) do
 
-    local modem = peripheral.wrap(name)
+  if peripheral.getType(side) == "modem" then
+
+    local modem = peripheral.wrap(side)
 
     local ok, wireless = pcall(function()
       return modem.isWireless()
     end)
 
     if ok and wireless then
-      modemName = name
+
+      wirelessSide = side
+
       break
     end
   end
 end
 
-if modemName then
-  rednet.open(modemName)
+if wirelessSide then
+  rednet.open(wirelessSide)
 end
 
 local nodes = {}
@@ -98,7 +104,7 @@ for _, mon in ipairs(monitors) do
 end
 
 -- =========================================================
---  Main
+--  Main Display
 -- =========================================================
 
 local function drawMain(mon, heartbeat, id)
@@ -107,23 +113,25 @@ local function drawMain(mon, heartbeat, id)
 
   local w,h = mon.getSize()
 
+  -- Header
+
   paintutils.drawFilledBox(
-    1,1,w,2,
+    1,1,w,1,
     colors.orange
   )
 
   mon.setTextColor(colors.black)
 
   mon.setCursorPos(2,1)
-  mon.write("Factory OS SCADA")
+  mon.write("Factory OS")
 
   local info =
     "#" .. id ..
-    "  " ..
+    " " ..
     w .. "x" .. h
 
   mon.setCursorPos(
-    w - #info - 4,
+    w - #info - 3,
     1
   )
 
@@ -131,15 +139,17 @@ local function drawMain(mon, heartbeat, id)
 
   led(
     mon,
-    w - 1,
+    w,
     1,
     colors.lime,
     heartbeat
   )
 
+  -- Status
+
   statusLine(
     mon,
-    4,
+    3,
     colors.lime,
     "Heartbeat",
     heartbeat
@@ -147,31 +157,43 @@ local function drawMain(mon, heartbeat, id)
 
   statusLine(
     mon,
-    6,
+    5,
     colors.cyan,
     "Wireless",
-    modemName ~= nil
+    wirelessSide ~= nil
   )
 
   statusLine(
     mon,
-    8,
+    7,
     colors.orange,
     "Discovery",
     true
   )
 
+  mon.setCursorPos(3,9)
+
+  mon.setTextColor(colors.gray)
+
+  mon.write(
+    "MODEM: " ..
+    tostring(wirelessSide)
+  )
+
+  -- Nodes
+
   mon.setTextColor(colors.cyan)
 
-  mon.setCursorPos(3,11)
+  mon.setCursorPos(3,12)
   mon.write("Network Nodes")
 
-  local y = 13
+  local y = 14
 
   for name, node in pairs(nodes) do
 
     local alive =
-      (os.clock() - node.lastSeen) < 6
+      (os.epoch("utc") - node.lastSeen)
+      < 6000
 
     led(
       mon,
@@ -244,62 +266,63 @@ local function drawMain(mon, heartbeat, id)
 end
 
 -- =========================================================
---  Tiny Monitor
+--  Tiny Status Monitor
 -- =========================================================
 
-local function drawTiny(mon, heartbeat, id)
+local function drawTiny(mon, heartbeat)
 
   clear(mon)
 
-  local w,h = mon.getSize()
+  center(mon,1,"STATUS",colors.orange)
 
-  paintutils.drawFilledBox(
-    1,1,w,2,
-    colors.orange
-  )
+  local aliveCount = 0
 
-  mon.setTextColor(colors.black)
+  for _, node in pairs(nodes) do
 
-  mon.setCursorPos(2,1)
-  mon.write("#" .. id)
+    local alive =
+      (os.epoch("utc") - node.lastSeen)
+      < 6000
+
+    if alive then
+      aliveCount = aliveCount + 1
+    end
+  end
 
   led(
     mon,
-    w - 1,
-    1,
-    colors.lime,
-    heartbeat
-  )
-
-  statusLine(
-    mon,
+    3,
     3,
     colors.lime,
-    "HB",
     heartbeat
   )
 
-  statusLine(
+  mon.setCursorPos(5,3)
+  mon.setTextColor(colors.lightGray)
+  mon.write("HB")
+
+  led(
     mon,
+    3,
     5,
     colors.cyan,
-    "NET",
-    modemName ~= nil
+    wirelessSide ~= nil
   )
 
-  local nodeCount = 0
+  mon.setCursorPos(5,5)
+  mon.write("NET")
 
-  for _ in pairs(nodes) do
-    nodeCount = nodeCount + 1
-  end
-
-  statusLine(
+  led(
     mon,
+    3,
     7,
-    colors.orange,
-    tostring(nodeCount),
+    aliveCount > 0
+      and colors.orange
+      or colors.red,
     true
   )
+
+  mon.setCursorPos(5,7)
+  mon.write("NODES")
 end
 
 -- =========================================================
@@ -310,7 +333,7 @@ local function networkLoop()
 
   while true do
 
-    local _, msg =
+    local id, msg, protocol =
       rednet.receive("factoryos")
 
     if type(msg) == "table" then
@@ -319,7 +342,7 @@ local function networkLoop()
 
         nodes[msg.node] = {
 
-          lastSeen = os.clock(),
+          lastSeen = os.epoch("utc"),
 
           items = msg.items,
 
@@ -347,7 +370,7 @@ local function uiLoop()
       pcall(function()
 
         if i == 4 then
-          drawTiny(mon, heartbeat, i)
+          drawTiny(mon, heartbeat)
         else
           drawMain(mon, heartbeat, i)
         end
