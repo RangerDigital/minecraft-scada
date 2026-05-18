@@ -77,18 +77,39 @@ local function drawMonitorStatus(mon, heartbeat)
   mon.setBackgroundColor(colors.black)
   mon.clear()
 
-  local _, h = mon.getSize()
-  local step = math.max(1, math.min(2, math.floor((h - 1) / 3)))
-  local top  = 2
+  local w, h = mon.getSize()
 
   local alarm = false
   for _, s in ipairs(tankStates) do
     if s.alarm then alarm = true; break end
   end
 
-  statusLine(mon, 2, top,          colors.lime, "HB",  heartbeat)
-  statusLine(mon, 2, top + step,   colors.cyan, "NET", wirelessSide ~= nil)
-  statusLine(mon, 2, top + step*2, alarm and colors.red or colors.gray, "ALARM", alarm)
+  -- Status row: heartbeat LED + OK/ALARM text
+  led(mon, 1, 1, colors.lime, heartbeat)
+  mon.setTextColor(alarm and colors.red or colors.gray)
+  mon.setCursorPos(3, 1)
+  mon.write(alarm and "ALARM" or "OK")
+
+  -- One row per tank
+  local y = 3
+  if #tankStates == 0 then
+    mon.setCursorPos(2, y)
+    mon.setTextColor(colors.red)
+    mon.write("No tanks")
+    return
+  end
+
+  for _, s in ipairs(tankStates) do
+    if y > h then break end
+    local c = s.alarm and colors.red
+      or (s.percent < 50 and colors.yellow or colors.lime)
+    mon.setCursorPos(1, y)
+    mon.setTextColor(c)
+    mon.write(shortFluid(s.fluid, w - 5))
+    mon.setCursorPos(w - 3, y)
+    mon.write(string.format("%3d%%", s.percent))
+    y = y + 1
+  end
 end
 
 -- =========================================================
@@ -134,7 +155,7 @@ local function readFluidPeripheral(p)
 end
 
 local function readAllTanks()
-  tankStates = {}
+  local newStates = {}
   for i, t in ipairs(tanks) do
     local data = readFluidPeripheral(t.p)
     if data then
@@ -144,8 +165,11 @@ local function readAllTanks()
 
       for _, slot in pairs(data) do
         if type(slot) == "table" then
-          totalAmount   = totalAmount   + (slot.amount   or 0)
-          totalCapacity = totalCapacity + (slot.capacity or CONFIG.capacityFallback)
+          totalAmount = totalAmount + (slot.amount or 0)
+          -- Create fluid tanks report the same total capacity for every slot;
+          -- take the maximum rather than summing to avoid multiplying the value.
+          local cap = slot.capacity or 0
+          if cap > totalCapacity then totalCapacity = cap end
           if slot.name then fluidName = slot.name end
         end
       end

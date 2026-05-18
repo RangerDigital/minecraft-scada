@@ -117,14 +117,11 @@ local function drawLogs(mon, heartbeat)
   clear(mon)
   local w, h = mon.getSize()
 
-  -- Red header bar
-  paintutils.drawFilledBox(1, 1, w, 1, colors.red)
-  mon.setBackgroundColor(colors.red)
-  mon.setTextColor(colors.white)
-  mon.setCursorPos(2, 1)
+  -- Header - heartbeat LED + title, no background fill
+  led(mon, 1, 1, colors.lime, heartbeat)
+  mon.setTextColor(colors.red)
+  mon.setCursorPos(3, 1)
   mon.write("ALARMS & LOGS")
-  led(mon, w, 1, colors.lime, heartbeat)
-  mon.setBackgroundColor(colors.black)
 
   local y = 2
 
@@ -175,16 +172,13 @@ local function drawHeader(mon, id, heartbeat)
   mon.setCursorPos(3, 1)
   mon.write("Factory OS")
 
-  -- Monitor number and size in gray, right-aligned before network LED
+  -- Monitor number and size in gray, right-aligned
   local info = "#" .. id .. " " .. w .. "x" .. h
-  if w >= #info + 5 then
+  if w >= #info + 4 then
     mon.setTextColor(colors.gray)
-    mon.setCursorPos(w - #info - 1, 1)
+    mon.setCursorPos(w - #info + 1, 1)
     mon.write(info)
   end
-
-  -- Network status LED at right
-  led(mon, w, 1, wirelessModem and colors.cyan or colors.red, wirelessModem ~= nil)
 end
 
 -- =========================================================
