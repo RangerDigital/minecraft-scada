@@ -17,6 +17,21 @@ local alarms = {}
 local logs   = {}
 
 -- =========================================================
+--  Power Plant B – node name mapping
+--  Edit these values to match what your tank.lua / boiler.lua
+--  nodes actually broadcast as their node names.
+-- =========================================================
+local PLANT_B = {
+  name           = 'Power Plant B "The Tower"',
+  netherTank1    = "nether_1_1",
+  netherTank2    = "nether_1_2",
+  overworldTank1 = "tank_1_1",
+  overworldTank2 = "tank_1_2",
+  boiler1        = "boiler_1_1",
+  boiler2        = "boiler_1_2",
+}
+
+-- =========================================================
 --  Helpers
 -- =========================================================
 
@@ -383,6 +398,186 @@ local function drawMain(mon, id, heartbeat)
 end
 
 -- =========================================================
+--  Power Plant B – SCADA topology diagram
+-- =========================================================
+
+local function drawPlantB(mon, heartbeat)
+  ui.clearMon(mon)
+  local w, h = mon.getSize()
+
+  local mid  = math.floor(w / 2) + 1
+  local barW = math.max(6, math.min(16, mid - 7))
+
+  local y = 1
+
+  -- ── Header ────────────────────────────────────────────
+  led(mon, 1, y, colors.lime, heartbeat)
+  mon.setTextColor(colors.orange)
+  mon.setCursorPos(3, y)
+  mon.write(PLANT_B.name)
+  led(mon, w - 5, y, colors.cyan, wirelessModem ~= nil)
+  mon.setCursorPos(w - 3, y)
+  mon.setTextColor(wirelessModem and colors.white or colors.gray)
+  mon.write("NET")
+  y = y + 1
+
+  -- ── Separator ─────────────────────────────────────────
+  mon.setCursorPos(1, y)
+  mon.setTextColor(colors.gray)
+  mon.write(("-"):rep(w))
+  y = y + 1
+
+  -- Helper: draw one tank column at colX starting at row y.
+  -- Renders a label row and a fill-bar row (2 rows total).
+  local function drawTankCol(colX, nodeKey, label)
+    local node      = nodes[nodeKey]
+    local alive     = node and nodeAlive(node)
+    local pct       = alive and (node.percent or 0) or 0
+    local alm       = node and node.alarm
+    local fillColor = (alm or pct <= 20) and colors.red
+                   or (pct <= 50)        and colors.yellow
+                   or colors.orange
+
+    -- label row
+    led(mon, colX, y, alive and (alm and colors.red or colors.lime) or colors.gray, alive == true)
+    mon.setCursorPos(colX + 2, y)
+    mon.setTextColor(colors.lightGray)
+    mon.write(label)
+
+    -- bar row
+    local filled = math.floor(barW * math.min(pct, 100) / 100)
+    mon.setCursorPos(colX, y + 1)
+    for i = 1, barW do
+      mon.setBackgroundColor(i <= filled and fillColor or colors.gray)
+      mon.write(" ")
+    end
+    mon.setBackgroundColor(colors.black)
+    mon.setTextColor(pct <= 20 and colors.red or pct <= 50 and colors.yellow or colors.white)
+    mon.write(string.format(" %3d%%", pct))
+  end
+
+  -- ── Nether source ─────────────────────────────────────
+  if y <= h then
+    mon.setCursorPos(3, y)
+    mon.setTextColor(colors.red)
+    mon.write("NETHER SOURCE")
+    y = y + 1
+  end
+  if y + 1 <= h then
+    drawTankCol(2,   PLANT_B.netherTank1, "Nether T1")
+    drawTankCol(mid, PLANT_B.netherTank2, "Nether T2")
+    y = y + 2
+  end
+
+  -- ── Train connector ───────────────────────────────────
+  if y <= h then
+    local lbl = "< LAVA TRAIN >"
+    local pad = math.max(0, math.floor((w - #lbl) / 2))
+    mon.setCursorPos(1, y)
+    mon.setTextColor(colors.gray)
+    mon.write(("-"):rep(pad))
+    mon.setTextColor(colors.yellow)
+    mon.write(lbl)
+    mon.setTextColor(colors.gray)
+    mon.write(("-"):rep(math.max(0, w - pad - #lbl)))
+    y = y + 1
+  end
+
+  -- ── Overworld supply ──────────────────────────────────
+  if y <= h then
+    mon.setCursorPos(3, y)
+    mon.setTextColor(colors.cyan)
+    mon.write("OVERWORLD SUPPLY")
+    y = y + 1
+  end
+  if y + 1 <= h then
+    drawTankCol(2,   PLANT_B.overworldTank1, "OW Tank 1")
+    drawTankCol(mid, PLANT_B.overworldTank2, "OW Tank 2")
+    y = y + 2
+  end
+
+  -- ── Down arrows to boilers ────────────────────────────
+  if y <= h then
+    mon.setTextColor(colors.gray)
+    mon.setCursorPos(2 + math.floor(barW / 2), y)
+    mon.write("v")
+    mon.setCursorPos(mid + math.floor(barW / 2), y)
+    mon.write("v")
+    y = y + 1
+  end
+
+  -- ── Boiler panels ─────────────────────────────────────
+  local function drawBoilerPanel(colX, nodeKey, label)
+    local node  = nodes[nodeKey]
+    local alive = node and nodeAlive(node)
+    local alm   = node and node.alarm
+
+    led(mon, colX, y, alive and (alm and colors.red or colors.lime) or colors.gray, alive == true)
+    mon.setCursorPos(colX + 2, y)
+    mon.setTextColor(alm and colors.red or alive and colors.cyan or colors.gray)
+    mon.write(label)
+
+    if not alive then
+      if y + 1 <= h then
+        mon.setCursorPos(colX, y + 1)
+        mon.setTextColor(colors.gray)
+        mon.write("  offline")
+      end
+      return
+    end
+
+    local sc = (alm or node.status == "WATER_LOW")  and colors.red
+            or (node.status == "WARMING"
+             or node.status == "STEAM_HIGH")         and colors.yellow
+            or colors.lime
+
+    if y + 1 <= h then
+      mon.setCursorPos(colX, y + 1)
+      mon.setTextColor(sc)
+      mon.write(string.format("T:%3d%% W:%3d%%", node.tempPercent or 0, node.waterPct or 0))
+    end
+    if y + 2 <= h then
+      mon.setCursorPos(colX, y + 2)
+      mon.setTextColor(sc)
+      mon.write(string.format("S:%3d%% %-8s", node.steamPct or 0, node.status or "?"))
+    end
+  end
+
+  if y + 2 <= h then
+    drawBoilerPanel(2,   PLANT_B.boiler1, "BOILER 1")
+    drawBoilerPanel(mid, PLANT_B.boiler2, "BOILER 2")
+    y = y + 3
+  end
+
+  -- ── Bottom separator ──────────────────────────────────
+  if y <= h then
+    mon.setCursorPos(1, y)
+    mon.setTextColor(colors.gray)
+    mon.write(("-"):rep(w))
+    y = y + 1
+  end
+
+  -- ── Plant alarm summary ───────────────────────────────
+  if y <= h then
+    local plantAlarm = false
+    for _, k in ipairs({ PLANT_B.netherTank1, PLANT_B.netherTank2,
+                         PLANT_B.overworldTank1, PLANT_B.overworldTank2,
+                         PLANT_B.boiler1, PLANT_B.boiler2 }) do
+      if nodes[k] and nodes[k].alarm then plantAlarm = true; break end
+    end
+    led(mon, 2, y, plantAlarm and colors.red or colors.lime, true)
+    mon.setCursorPos(4, y)
+    if plantAlarm then
+      mon.setTextColor(colors.red)
+      mon.write("PLANT ALARM")
+    else
+      mon.setTextColor(colors.lime)
+      mon.write("Plant nominal")
+    end
+  end
+end
+
+-- =========================================================
 --  Network
 -- =========================================================
 
@@ -413,6 +608,18 @@ local function networkLoop()
           alarm    = msg.alarm,
         }
         addLog("tank " .. tostring(msg.node) .. " " .. tostring(msg.percent) .. "%")
+
+      elseif msg.type == "boiler_status" then
+        nodes[msg.node] = {
+          app         = "boiler",
+          lastSeen    = os.epoch("utc"),
+          tempPercent = msg.tempPercent or 0,
+          waterPct    = msg.waterPct    or 0,
+          steamPct    = msg.steamPct    or 0,
+          status      = msg.status      or "?",
+          alarm       = msg.alarm,
+        }
+        addLog("boiler " .. tostring(msg.node) .. " T:" .. tostring(msg.tempPercent) .. "%")
 
       elseif msg.type == "alarm" then
         addAlarm(tostring(msg.node) .. ": " .. tostring(msg.message))
@@ -446,6 +653,8 @@ local function uiLoop()
           drawTiny(mon, heartbeat)
         elseif i == 2 then
           drawLogs(mon, heartbeat)
+        elseif i == 3 then
+          drawPlantB(mon, heartbeat)
         else
           drawMain(mon, i, heartbeat)
         end
