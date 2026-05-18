@@ -165,27 +165,26 @@ end
 local function drawHeader(mon, id, heartbeat)
   local w, h = mon.getSize()
 
-  paintutils.drawFilledBox(1, 1, w, 1, colors.orange)
-  mon.setBackgroundColor(colors.orange)
-  mon.setTextColor(colors.black)
+  mon.setBackgroundColor(colors.black)
 
-  local info  = "#" .. id .. " " .. w .. "x" .. h
-  local title = "Factory OS Monitor"
+  -- Heartbeat LED blinks green
+  led(mon, 1, 1, colors.lime, heartbeat)
 
-  mon.setCursorPos(2, 1)
-  if w >= #title + #info + 4 then
-    mon.write(title)
+  -- "Factory OS" in orange
+  mon.setTextColor(colors.orange)
+  mon.setCursorPos(3, 1)
+  mon.write("Factory OS")
+
+  -- Monitor number and size in gray, right-aligned before network LED
+  local info = "#" .. id .. " " .. w .. "x" .. h
+  if w >= #info + 5 then
+    mon.setTextColor(colors.gray)
     mon.setCursorPos(w - #info - 1, 1)
-    mon.write(info)
-  elseif w >= #info + 3 then
     mon.write(info)
   end
 
-  -- Wireless ender modem status LED (rightmost cell of header)
+  -- Network status LED at right
   led(mon, w, 1, wirelessModem and colors.cyan or colors.red, wirelessModem ~= nil)
-
-  mon.setBackgroundColor(colors.black)
-  mon.setTextColor(colors.white)
 end
 
 -- =========================================================
