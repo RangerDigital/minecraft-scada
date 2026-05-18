@@ -44,6 +44,8 @@ local function networkLoop()
       if msg.type == "storage_status" then
         nodes[msg.node] = {
           app      = "storage",
+          label    = msg.label or msg.node,
+          group    = msg.group or "",
           lastSeen = os.epoch("utc"),
           items    = msg.items or {},
           alarm    = false,
@@ -51,11 +53,24 @@ local function networkLoop()
       elseif msg.type == "tank_status" then
         nodes[msg.node] = {
           app      = "tank",
+          label    = msg.label or msg.node,
+          group    = msg.group or "",
           lastSeen = os.epoch("utc"),
           fluid    = msg.fluid,
           percent  = msg.percent or 0,
           level    = msg.level,
           alarm    = msg.alarm,
+        }
+      elseif msg.type == "train_status" then
+        nodes[msg.node] = {
+          app        = "train",
+          label      = msg.label or msg.node,
+          group      = msg.group or "",
+          lastSeen   = os.epoch("utc"),
+          present    = msg.present,
+          train      = msg.train,
+          assembling = msg.assembling,
+          alarm      = false,
         }
       elseif msg.type == "alarm" then
         addAlarm(tostring(msg.node) .. " " .. tostring(msg.message))
@@ -141,79 +156,123 @@ local function drawUI(heartbeat)
   y = y + 1
 
   -- ── Node list ─────────────────────────────────────────
-  -- Collect and sort live + dead nodes
-  local entries = {}
-  for name, node in pairs(nodes) do
-    table.insert(entries, { name = name, node = node })
-  end
-  table.sort(entries, function(a, b) return a.name < b.name end)
+  -- Collect nodes, grouped by node.group
+  local groups   = {}
+  local ordering = {}
 
-  if #entries == 0 then
+  for name, node in pairs(nodes) do
+    local g = node.group or ""
+    if not groups[g] then
+      groups[g] = {}
+      table.insert(ordering, g)
+    end
+    table.insert(groups[g], { name = name, node = node })
+  end
+
+  table.sort(ordering, function(a, b)
+    if a == "" then return false end
+    if b == "" then return true  end
+    return a < b
+  end)
+
+  for _, g in ipairs(ordering) do
+    table.sort(groups[g], function(a, b)
+      return (a.node.label or a.name) < (b.node.label or b.name)
+    end)
+  end
+
+  if #ordering == 0 then
     term.setCursorPos(1, y)
     term.setTextColor(colors.gray)
     term.write("Waiting for nodes...")
     return
   end
 
-  for _, e in ipairs(entries) do
-    if y > H then break end
-
-    local name  = e.name
-    local node  = e.node
-    local alive = nodeAlive(node)
-    local alm   = node.alarm
-
-    -- LED dot
-    term.setCursorPos(1, y)
-    term.setBackgroundColor(colors.black)
-    if not alive then
-      term.setTextColor(colors.gray)
-      term.write("\7")
-    elseif alm then
-      term.setTextColor(colors.red)
-      term.write("\7")
-    else
-      term.setTextColor(colors.lime)
-      term.write("\7")
+  for _, g in ipairs(ordering) do
+    -- Group header for named groups
+    if g ~= "" and y <= H then
+      term.setCursorPos(1, y)
+      term.setTextColor(colors.orange)
+      local hdr = g:sub(1, W)
+      term.write(hdr .. (" "):rep(math.max(0, W - #hdr)))
+      y = y + 1
     end
 
-    -- Node name (truncated to fit)
-    local nameW = math.min(#name, 10)
-    term.setTextColor(alive and colors.white or colors.gray)
-    term.write(" " .. name:sub(1, nameW))
+    for _, e in ipairs(groups[g]) do
+      if y > H then break end
 
-    -- Value / status on the right
-    local valStr = ""
-    if node.app == "tank" then
-      local pct = node.percent or 0
-      local barColor = (alm or pct <= 20) and colors.red
-                    or pct <= 50          and colors.yellow
-                    or colors.orange
-      term.setCursorPos(13, y)
-      fillBar(pct, barColor)
-      term.setTextColor(barColor)
-      term.write(string.format("%3d%%", pct))
+      local node  = e.node
+      local alive = nodeAlive(node)
+      local alm   = node.alarm
+      local lbl   = node.label or e.name
 
-    elseif node.app == "storage" then
-      local overflow = 0
-      for _, item in ipairs(node.items or {}) do
-        if (item.overflow or 0) > 0 then overflow = overflow + 1 end
-      end
-      term.setCursorPos(12, y)
-      if overflow > 0 then
+      -- LED dot
+      term.setCursorPos(1, y)
+      term.setBackgroundColor(colors.black)
+      if not alive then
+        term.setTextColor(colors.gray)
+        term.write("\7")
+      elseif alm then
         term.setTextColor(colors.red)
-        term.write(overflow .. " overflow")
+        term.write("\7")
       else
         term.setTextColor(colors.lime)
-        term.write("nominal")
+        term.write("\7")
       end
-    else
-      term.setCursorPos(12, y)
-      term.setTextColor(colors.gray)
-      term.write(tostring(node.app or "?"))
-    end
 
-    y = y + 1
+      -- Label (truncated)
+      local nameW = math.min(#lbl, 10)
+      term.setTextColor(alive and colors.white or colors.gray)
+      term.write(" " .. lbl:sub(1, nameW))
+
+      -- Value / status
+      if node.app == "tank" then
+        local pct = node.percent or 0
+        local barColor = (alm or pct <= 20) and colors.red
+                      or pct <= 50          and colors.yellow
+                      or colors.orange
+        term.setCursorPos(13, y)
+        fillBar(pct, barColor)
+        term.setTextColor(barColor)
+        term.write(string.format("%3d%%", pct))
+
+      elseif node.app == "train" then
+        term.setCursorPos(13, y)
+        if not alive then
+          term.setTextColor(colors.red)
+          term.write("offline")
+        elseif node.assembling then
+          term.setTextColor(colors.yellow)
+          term.write("assembling")
+        elseif node.present then
+          term.setTextColor(colors.lime)
+          term.write((node.train or "?"):sub(1, W - 13))
+        else
+          term.setTextColor(colors.gray)
+          term.write("empty")
+        end
+
+      elseif node.app == "storage" then
+        local overflow = 0
+        for _, item in ipairs(node.items or {}) do
+          if (item.overflow or 0) > 0 then overflow = overflow + 1 end
+        end
+        term.setCursorPos(12, y)
+        if overflow > 0 then
+          term.setTextColor(colors.red)
+          term.write(overflow .. " overflow")
+        else
+          term.setTextColor(colors.lime)
+          term.write("nominal")
+        end
+      else
+        term.setCursorPos(12, y)
+        term.setTextColor(colors.gray)
+        term.write(tostring(node.app or "?"))
+      end
+
+      y = y + 1
+    end
   end
 
   -- ── Footer ────────────────────────────────────────────

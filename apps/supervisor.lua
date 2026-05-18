@@ -214,6 +214,7 @@ end
 
 local function widgetTank(mon, name, node, ox, y, w, budget)
   local pct = node.percent or 0
+  local lbl = shortName(node.label or name, 16)
 
   led(mon, ox, y, nodeAlive(node) and colors.lime or colors.red, true)
   mon.setCursorPos(ox + 2, y)
@@ -227,8 +228,8 @@ local function widgetTank(mon, name, node, ox, y, w, budget)
   end
 
   mon.write(string.format(
-    "%-14s %3d%%  %-11s",
-    shortName(node.fluid or "empty"),
+    "%-16s %3d%%  %-11s",
+    lbl,
     pct,
     node.level or "?"
   ))
@@ -251,6 +252,30 @@ local function widgetTank(mon, name, node, ox, y, w, budget)
   return 2
 end
 
+local function widgetTrain(mon, name, node, ox, y, w, budget)
+  local alive = nodeAlive(node)
+  local lbl   = shortName(node.label or name, 14)
+
+  led(mon, ox, y, alive and colors.lime or colors.red, true)
+  mon.setCursorPos(ox + 2, y)
+
+  if not alive then
+    mon.setTextColor(colors.red)
+    mon.write(string.format("%-14s  offline", lbl))
+  elseif node.assembling then
+    mon.setTextColor(colors.yellow)
+    mon.write(string.format("%-14s  assembling", lbl))
+  elseif node.present then
+    mon.setTextColor(colors.lime)
+    mon.write(string.format("%-14s  %s", lbl, shortName(node.train or "?", 16)))
+  else
+    mon.setTextColor(colors.gray)
+    mon.write(string.format("%-14s  empty", lbl))
+  end
+
+  return 1
+end
+
 -- =========================================================
 --  Alarm panel widget
 -- =========================================================
@@ -265,10 +290,11 @@ local function widgetAlarms(mon, ox, y, w, budget)
   for name, node in pairs(nodes) do
     if nodeAlive(node) and node.app == "tank" then
       local pct = node.percent or 0
+      local lbl = node.label or name
       if     pct <= CRIT_PCT then
-        table.insert(crits, { name = name, pct = pct })
+        table.insert(crits, { label = lbl, pct = pct })
       elseif pct <  WARN_PCT then
-        table.insert(warns,  { name = name, pct = pct })
+        table.insert(warns,  { label = lbl, pct = pct })
       end
     end
   end
@@ -297,7 +323,7 @@ local function widgetAlarms(mon, ox, y, w, budget)
     if row >= budget then break end
     mon.setCursorPos(ox + 2, y + row)
     mon.setTextColor(colors.red)
-    mon.write(string.format("CRIT  %-12s %3d%%", shortName(e.name, 12), e.pct))
+    mon.write(string.format("CRIT  %-12s %3d%%", shortName(e.label, 12), e.pct))
     row = row + 1
   end
 
@@ -305,7 +331,7 @@ local function widgetAlarms(mon, ox, y, w, budget)
     if row >= budget then break end
     mon.setCursorPos(ox + 2, y + row)
     mon.setTextColor(colors.yellow)
-    mon.write(string.format("WARN  %-12s %3d%%", shortName(e.name, 12), e.pct))
+    mon.write(string.format("WARN  %-12s %3d%%", shortName(e.label, 12), e.pct))
     row = row + 1
   end
 
@@ -335,18 +361,40 @@ local function drawMain(mon, id, heartbeat)
     mon.write(("-"):rep(w))
   end
 
-  -- Collect live nodes sorted by name for stable layout
-  local live = {}
+  -- Collect live nodes, grouped by node.group
+  local groups   = {}
+  local ordering = {}
+  local totalLive = 0
+
   for name, node in pairs(nodes) do
     if nodeAlive(node) then
-      table.insert(live, { name = name, node = node })
+      local g = node.group or ""
+      if not groups[g] then
+        groups[g] = {}
+        table.insert(ordering, g)
+      end
+      table.insert(groups[g], { name = name, node = node })
+      totalLive = totalLive + 1
     end
   end
-  table.sort(live, function(a, b) return a.name < b.name end)
+
+  -- Named groups first (alphabetical), ungrouped last
+  table.sort(ordering, function(a, b)
+    if a == "" then return false end
+    if b == "" then return true  end
+    return a < b
+  end)
+
+  -- Sort entries within each group by label
+  for _, g in ipairs(ordering) do
+    table.sort(groups[g], function(a, b)
+      return (a.node.label or a.name) < (b.node.label or b.name)
+    end)
+  end
 
   local startY = sepY + 1
 
-  if #live == 0 then
+  if totalLive == 0 then
     mon.setCursorPos(3, startY)
     mon.setTextColor(colors.gray)
     mon.write("Waiting for SCADA nodes...")
@@ -355,30 +403,43 @@ local function drawMain(mon, id, heartbeat)
     return
   end
 
-  -- Distribute remaining height evenly across discovered nodes
   local contentH = h - startY + 1
-  local perNode  = math.max(2, math.floor(contentH / #live))
+  local perNode  = math.max(2, math.floor(contentH / totalLive))
 
   local y = startY
-  for _, entry in ipairs(live) do
-    if y > h then break end
+  for _, g in ipairs(ordering) do
+    local entries = groups[g]
 
-    local budget = math.min(perNode, h - y + 1)
-    local used
-
-    if entry.node.app == "storage" then
-      used = widgetStorage(mon, entry.name, entry.node, 2, y, w, budget)
-    elseif entry.node.app == "tank" then
-      used = widgetTank(mon, entry.name, entry.node, 2, y, w, budget)
-    else
-      led(mon, 2, y, nodeAlive(entry.node) and colors.lime or colors.gray, true)
-      mon.setCursorPos(4, y)
-      mon.setTextColor(colors.lightGray)
-      mon.write(shortName(entry.name) .. " [" .. tostring(entry.node.app or "?") .. "]")
-      used = 1
+    -- Group header for named groups
+    if g ~= "" and y <= h then
+      mon.setCursorPos(1, y)
+      mon.setTextColor(colors.orange)
+      local hdr = "- " .. g .. " "
+      mon.write(hdr .. ("-"):rep(math.max(0, w - #hdr)))
+      y = y + 1
     end
 
-    y = y + used + 1
+    for _, entry in ipairs(entries) do
+      if y > h then break end
+      local budget = math.min(perNode, h - y + 1)
+      local used
+
+      if entry.node.app == "storage" then
+        used = widgetStorage(mon, entry.name, entry.node, 2, y, w, budget)
+      elseif entry.node.app == "tank" then
+        used = widgetTank(mon, entry.name, entry.node, 2, y, w, budget)
+      elseif entry.node.app == "train" then
+        used = widgetTrain(mon, entry.name, entry.node, 2, y, w, budget)
+      else
+        led(mon, 2, y, nodeAlive(entry.node) and colors.lime or colors.gray, true)
+        mon.setCursorPos(4, y)
+        mon.setTextColor(colors.lightGray)
+        mon.write(shortName(entry.node.label or entry.name, 18) .. " [" .. tostring(entry.node.app or "?") .. "]")
+        used = 1
+      end
+
+      y = y + used + 1
+    end
   end
 end
 
