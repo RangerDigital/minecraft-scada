@@ -182,6 +182,20 @@ local function drawHeader(mon, id, heartbeat)
 end
 
 -- =========================================================
+--  Helpers
+-- =========================================================
+
+local function fmtTicks(ticks)
+  if not ticks or ticks < 0 then return "?" end
+  local secs = math.floor(ticks / 20)
+  if secs < 60 then return secs .. "s" end
+  local mins = math.floor(secs / 60)
+  local rem  = secs % 60
+  if rem == 0 then return mins .. "m" end
+  return mins .. "m" .. string.format("%02d", rem) .. "s"
+end
+
+-- =========================================================
 --  Widgets
 -- =========================================================
 
@@ -256,50 +270,91 @@ end
 
 local function widgetTrain(mon, name, node, ox, y, w, budget)
   local alive = nodeAlive(node)
-  local lblW  = math.max(14, w - ox - 16)  -- leave room for status string
+  local lblW  = math.max(14, w - ox - 16)
   local lbl   = shortName(node.label or name, lblW)
 
-  -- Status colour
-  local sc = not alive       and colors.red
-          or node.assembling  and colors.yellow
-          or node.present     and colors.lime
-          or                      colors.gray
+  local sc = not alive        and colors.red
+          or node.assembling   and colors.yellow
+          or node.present      and colors.lime
+          or                       colors.gray
 
   -- Row 1: LED  label  status
   led(mon, ox, y, sc, true)
   mon.setCursorPos(ox + 2, y)
   mon.setTextColor(sc)
-  local statusStr = not alive      and "OFFLINE"
-                 or node.assembling and "ASSEMBLING"
-                 or node.present    and "PRESENT"
-                 or                     "empty"
+  local statusStr = not alive       and "OFFLINE"
+                 or node.assembling  and "ASSEMBLING"
+                 or node.present     and "PRESENT"
+                 or                      "empty"
   mon.write(string.format("%-" .. lblW .. "s  %s", lbl, statusStr))
 
-  if budget < 2 then return 1 end
+  local row = 1
+  if budget < 2 then return row end
 
-  -- Row 2: train name  cars  schedule
-  mon.setCursorPos(ox + 2, y + 1)
+  -- Row 2: train name + cars + dwell time + departure estimate
+  mon.setCursorPos(ox + 2, y + row)
   if node.present or node.assembling then
-    local trainStr = shortName(node.train or "?", 14)
-    local carsStr  = node.cars and (" [" .. node.cars .. "c]") or ""
-    local routeStr = ""
-    if node.scheduleCurrent then
-      routeStr = "  ->" .. shortName(node.scheduleCurrent, 12)
-      if node.scheduleTotal then
-        routeStr = routeStr .. " (" .. node.scheduleTotal .. ")"
+    local parts = { shortName(node.train or "?", 14) }
+    if node.cars then
+      table.insert(parts, "[" .. node.cars .. "c]")
+    end
+    if node.presentSince then
+      local dwellTicks = math.floor((os.epoch("utc") - node.presentSince) / 50)
+      table.insert(parts, "at:" .. fmtTicks(dwellTicks))
+      if node.currentWaitTicks then
+        local rem = node.currentWaitTicks - dwellTicks
+        if rem > 20 then
+          table.insert(parts, "dep:~" .. fmtTicks(rem))
+        else
+          table.insert(parts, "dep:overdue")
+        end
       end
     end
     mon.setTextColor(colors.lightGray)
-    mon.write((trainStr .. carsStr .. routeStr):sub(1, w - ox - 2))
+    mon.write(table.concat(parts, "  "):sub(1, w - ox - 2))
   else
-    -- Show station name on row 2 when empty
     if node.station then
       mon.setTextColor(colors.gray)
       mon.write(shortName(node.station, w - ox - 2))
     end
   end
+  row = row + 1
 
-  return 2
+  -- Route rows: one line per stop
+  local route = node.route
+  if type(route) ~= "table" or #route == 0 then return row end
+
+  for _, stop in ipairs(route) do
+    if row >= budget then break end
+    mon.setCursorPos(ox + 2, y + row)
+
+    if stop.current then
+      mon.setTextColor(colors.lime)
+      mon.write("\16 ")   -- ► current stop indicator
+    else
+      mon.setTextColor(colors.gray)
+      mon.write("  ")
+    end
+
+    local destStr = shortName(stop.dest or "?", w - ox - 12)
+    mon.setTextColor(stop.current and colors.white or colors.gray)
+    mon.write(destStr)
+
+    -- Wait time right-aligned on same row
+    if stop.waitTicks then
+      local wStr = fmtTicks(stop.waitTicks)
+      local col  = w - #wStr
+      if col > ox + 4 + #destStr then
+        mon.setCursorPos(col, y + row)
+        mon.setTextColor(colors.gray)
+        mon.write(wStr)
+      end
+    end
+
+    row = row + 1
+  end
+
+  return row
 end
 
 -- =========================================================
@@ -507,20 +562,23 @@ local function networkLoop()
 
       elseif msg.type == "train_status" then
         nodes[msg.node] = {
-          app             = "train",
-          label           = msg.label or msg.node,
-          group           = msg.group or "",
-          lastSeen        = os.epoch("utc"),
-          station         = msg.station,
-          present         = msg.present,
-          train           = msg.train,
-          cars            = msg.cars,
-          assembling      = msg.assembling,
-          idle            = msg.idle,
-          scheduleCurrent = msg.scheduleCurrent,
-          scheduleNext    = msg.scheduleNext,
-          scheduleTotal   = msg.scheduleTotal,
-          alarm           = msg.alarm,
+          app              = "train",
+          label            = msg.label or msg.node,
+          group            = msg.group or "",
+          lastSeen         = os.epoch("utc"),
+          station          = msg.station,
+          present          = msg.present,
+          train            = msg.train,
+          cars             = msg.cars,
+          assembling       = msg.assembling,
+          idle             = msg.idle,
+          route            = msg.route,
+          presentSince     = msg.presentSince,
+          currentWaitTicks = msg.currentWaitTicks,
+          scheduleCurrent  = msg.scheduleCurrent,
+          scheduleNext     = msg.scheduleNext,
+          scheduleTotal    = msg.scheduleTotal,
+          alarm            = msg.alarm,
         }
         addLog("train " .. tostring(msg.node) .. " " .. (msg.present and "present" or "empty"))
 

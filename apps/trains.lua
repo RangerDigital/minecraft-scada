@@ -56,10 +56,11 @@ local monitors = { peripheral.find("monitor") }
 
 -- One record per discovered station peripheral:
 -- { name, stationName, present, train, cars,
---   assembling, idle,
---   scheduleCurrent, scheduleNext, scheduleTotal, scheduleCyclic,
---   alarm }
+--   assembling, idle, route, presentSince, currentWaitTicks, alarm }
 local stationStates = {}
+
+-- Track UTC ms when each station's train first became present
+local arrivalTimes = {}
 
 -- =========================================================
 --  Helpers
@@ -71,16 +72,48 @@ local function try(fn)
   return ok and v or nil
 end
 
--- Parse a schedule table from the peripheral into something useful
+-- Format ticks into a human-readable string
+local function fmtTicks(ticks)
+  if not ticks or ticks < 0 then return "?" end
+  local secs = math.floor(ticks / 20)
+  if secs < 60 then return secs .. "s" end
+  local mins = math.floor(secs / 60)
+  local rem  = secs % 60
+  if rem == 0 then return mins .. "m" end
+  return mins .. "m" .. string.format("%02d", rem) .. "s"
+end
+
+-- Extract the minimum timed wait (in ticks) from a schedule entry's conditions
+local function waitTicksOf(entry)
+  if type(entry.conditions) ~= "table" then return nil end
+  for _, cond in ipairs(entry.conditions) do
+    if type(cond) == "table" then
+      local id = tostring(cond.id or "")
+      local d  = type(cond.data) == "table" and cond.data or {}
+      if id:find("time") or id:find("delay") then
+        local v = tonumber(d.value)
+        if v then
+          local unit = tonumber(d.timeUnit) or 0
+          if unit == 1 then v = v * 20 end    -- seconds -> ticks
+          if unit == 2 then v = v * 1200 end  -- minutes -> ticks
+          return math.floor(v)
+        end
+      end
+    end
+  end
+  return nil
+end
+
+-- Parse a schedule table into usable fields + a route array
 local function parseSchedule(sched)
-  if type(sched) ~= "table" then return nil, nil, nil, nil end
+  if type(sched) ~= "table" then return nil, nil, nil, nil, {} end
 
   local entries = type(sched.entries) == "table" and sched.entries or {}
   local total   = #entries
-  if total == 0 then return nil, nil, 0, sched.cyclic end
+  if total == 0 then return nil, nil, 0, sched.cyclic, {} end
 
-  local cur     = (type(sched.currentEntry) == "number") and sched.currentEntry or 1
-  cur           = math.max(1, math.min(cur, total))
+  local cur = (type(sched.currentEntry) == "number") and sched.currentEntry or 1
+  cur = math.max(1, math.min(cur, total))
 
   local function destOf(e)
     if type(e) ~= "table" then return nil end
@@ -91,7 +124,17 @@ local function parseSchedule(sched)
   local nextIdx     = (cur % total) + 1
   local nextDest    = destOf(entries[nextIdx])
 
-  return currentDest, nextDest, total, sched.cyclic
+  -- Build simplified route array
+  local route = {}
+  for i, e in ipairs(entries) do
+    table.insert(route, {
+      dest      = destOf(e) or "?",
+      waitTicks = waitTicksOf(e),
+      current   = (i == cur),
+    })
+  end
+
+  return currentDest, nextDest, total, sched.cyclic, route
 end
 
 -- =========================================================
@@ -109,12 +152,20 @@ local function readAllStations()
     -- Station's configured in-game name
     local stationName = try(function() return s.p.getStationName() end) or s.name
 
+    -- Track arrival time
+    local key = s.name
+    if present and not arrivalTimes[key] then
+      arrivalTimes[key] = os.epoch("utc")
+    elseif not present and not assembling then
+      arrivalTimes[key] = nil
+    end
+    local presentSince = present and arrivalTimes[key] or nil
+
     -- Train info (only meaningful when present)
     local trainName, cars, idle
     if present or assembling then
       trainName = try(function() return s.p.getTrainName() end)
       cars      = try(function() return s.p.getCarCount()  end)
-      -- getTrainCars() may return a list instead
       if not cars then
         local carList = try(function() return s.p.getTrainCars() end)
         if type(carList) == "table" then cars = #carList end
@@ -122,23 +173,34 @@ local function readAllStations()
       idle = try(function() return s.p.isCurrentlyIdle() end) == true
     end
 
-    -- Schedule
-    local schedRaw     = try(function() return s.p.getSchedule() end)
-    local sCur, sNext, sTotal, sCyclic = parseSchedule(schedRaw)
+    -- Schedule + route
+    local schedRaw = try(function() return s.p.getSchedule() end)
+    local sCur, sNext, sTotal, sCyclic, route = parseSchedule(schedRaw)
+
+    -- Wait condition at the current schedule stop
+    local currentWaitTicks = nil
+    if route then
+      for _, r in ipairs(route) do
+        if r.current then currentWaitTicks = r.waitTicks; break end
+      end
+    end
 
     table.insert(newStates, {
-      name          = s.name,
-      stationName   = stationName,
-      present       = present,
-      assembling    = assembling,
-      train         = trainName,
-      cars          = cars,
-      idle          = idle,
-      scheduleCurrent = sCur,
-      scheduleNext    = sNext,
-      scheduleTotal   = sTotal,
-      scheduleCyclic  = sCyclic,
-      alarm           = false,
+      name             = s.name,
+      stationName      = stationName,
+      present          = present,
+      assembling       = assembling,
+      train            = trainName,
+      cars             = cars,
+      idle             = idle,
+      scheduleCurrent  = sCur,
+      scheduleNext     = sNext,
+      scheduleTotal    = sTotal,
+      scheduleCyclic   = sCyclic,
+      route            = route,
+      presentSince     = presentSince,
+      currentWaitTicks = currentWaitTicks,
+      alarm            = false,
     })
   end
 
@@ -162,18 +224,21 @@ local function broadcastStatus()
       node            = nodeName .. "_" .. i,
       label           = stLabel,
       group           = nodeGroup,
-      station         = s.stationName,
-      present         = s.present,
-      train           = s.train,
-      cars            = s.cars,
-      assembling      = s.assembling,
-      idle            = s.idle,
-      scheduleCurrent = s.scheduleCurrent,
-      scheduleNext    = s.scheduleNext,
-      scheduleTotal   = s.scheduleTotal,
-      scheduleCyclic  = s.scheduleCyclic,
-      alarm           = s.alarm,
-      heartbeat       = os.epoch("utc"),
+      station          = s.stationName,
+      present          = s.present,
+      train            = s.train,
+      cars             = s.cars,
+      assembling       = s.assembling,
+      idle             = s.idle,
+      scheduleCurrent  = s.scheduleCurrent,
+      scheduleNext     = s.scheduleNext,
+      scheduleTotal    = s.scheduleTotal,
+      scheduleCyclic   = s.scheduleCyclic,
+      route            = s.route,
+      presentSince     = s.presentSince,
+      currentWaitTicks = s.currentWaitTicks,
+      alarm            = s.alarm,
+      heartbeat        = os.epoch("utc"),
     }, PROTOCOL)
   end
 end
@@ -300,13 +365,22 @@ local function drawTerminal()
       term.setTextColor(colors.lightGray)
       local cycMark = s.scheduleCyclic and " (cyclic)" or ""
       print(string.format("  Route:   %d stops%s", s.scheduleTotal, cycMark))
-      if s.scheduleCurrent then
-        term.setTextColor(colors.white)
-        print("  Heading: " .. s.scheduleCurrent)
-      end
-      if s.scheduleNext and s.scheduleNext ~= s.scheduleCurrent then
-        term.setTextColor(colors.gray)
-        print("  Next:    " .. s.scheduleNext)
+      -- Full route list
+      if type(s.route) == "table" then
+        for _, r in ipairs(s.route) do
+          if r.current then
+            term.setTextColor(colors.lime)
+            term.write("  \16 " .. r.dest)
+          else
+            term.setTextColor(colors.gray)
+            term.write("    " .. r.dest)
+          end
+          if r.waitTicks then
+            term.setTextColor(colors.gray)
+            term.write("  [" .. fmtTicks(r.waitTicks) .. "]")
+          end
+          print("")
+        end
       end
     end
   end
