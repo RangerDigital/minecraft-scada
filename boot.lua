@@ -132,11 +132,14 @@ log("INFO", "Selected app: " .. app)
 -- =========================================================
 
 local files = {
+  "boot.lua",
   "apps/" .. app .. ".lua",
   "lib/wireless.lua",
   "lib/ui.lua",
   "lib/util.lua",
 }
+
+local selfUpdated = false
 
 for _, path in ipairs(files) do
 
@@ -154,6 +157,10 @@ for _, path in ipairs(files) do
 
       log("OK", "Updated " .. path)
 
+      if path == "boot.lua" then
+        selfUpdated = true
+      end
+
     else
 
       log("OK", path .. " current")
@@ -163,6 +170,14 @@ for _, path in ipairs(files) do
   if not ok then
     log("ERR", err)
   end
+end
+
+-- Re-run the new bootloader so updated file list takes effect immediately
+if selfUpdated then
+  log("BOOT", "Bootloader updated, restarting...")
+  sleep(1)
+  shell.run("/boot.lua")
+  return
 end
 
 -- =========================================================
