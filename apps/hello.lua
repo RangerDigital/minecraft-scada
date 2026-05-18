@@ -1,9 +1,28 @@
 -- =========================================================
---  Factory OS - Monitor Discovery
+--  Factory OS SCADA Test
 -- =========================================================
 
-term.setBackgroundColor(colors.black)
-term.clear()
+local monitors = {
+  peripheral.find("monitor")
+}
+
+local modem = peripheral.find(
+  "modem",
+  function(_, m)
+    return m.isWireless()
+  end
+)
+
+if modem then
+  rednet.open(peripheral.getName(modem))
+end
+
+local latest = {
+  item = "none",
+  amount = 0,
+  overflow = 0,
+  node = "none"
+}
 
 -- =========================================================
 --  Helpers
@@ -11,120 +30,140 @@ term.clear()
 
 local function center(mon, y, text, color)
 
-  local w, h = mon.getSize()
+  local w,h = mon.getSize()
 
-  mon.setTextColor(color or colors.white)
+  mon.setTextColor(color)
 
   mon.setCursorPos(
-    math.floor((w - #text) / 2),
+    math.floor((w - #text)/2),
     y
   )
 
   mon.write(text)
 end
 
-local function clear(mon)
+local function draw(mon, heartbeat)
 
   mon.setBackgroundColor(colors.black)
   mon.clear()
-  mon.setCursorPos(1,1)
-end
 
--- =========================================================
---  Find monitors
--- =========================================================
+  local w,h = mon.getSize()
 
-local monitors = { peripheral.find("monitor") }
+  paintutils.drawFilledBox(
+    1,1,w,3,
+    colors.orange
+  )
 
-term.setTextColor(colors.orange)
+  center(
+    mon,
+    2,
+    "FACTORY OS",
+    colors.black
+  )
 
-print("====================================")
-print("         FACTORY OS")
-print("====================================")
-print("")
+  center(
+    mon,
+    6,
+    "STORAGE TELEMETRY",
+    colors.cyan
+  )
 
-if #monitors == 0 then
+  mon.setTextColor(colors.white)
 
-  term.setTextColor(colors.red)
+  mon.setCursorPos(3,9)
+  mon.write("Node:")
 
-  print("No monitors found")
+  mon.setTextColor(colors.lightGray)
+  mon.write(" " .. latest.node)
 
-  return
-end
+  mon.setCursorPos(3,11)
 
-term.setTextColor(colors.lime)
+  mon.setTextColor(colors.white)
+  mon.write("Item:")
 
-print("Detected monitors: " .. #monitors)
+  mon.setTextColor(colors.orange)
+  mon.write(" " .. latest.item)
 
--- =========================================================
---  Configure + Draw
--- =========================================================
+  mon.setCursorPos(3,13)
 
-for i, mon in ipairs(monitors) do
+  mon.setTextColor(colors.white)
+  mon.write("Batch:")
 
-  pcall(function()
+  mon.setTextColor(colors.lime)
+  mon.write(" " .. latest.amount)
 
-    mon.setTextScale(0.5)
+  mon.setCursorPos(3,15)
 
-    clear(mon)
+  mon.setTextColor(colors.white)
+  mon.write("Overflow:")
 
-    local w, h = mon.getSize()
+  mon.setTextColor(colors.red)
+  mon.write(" +" .. latest.overflow)
 
-    -- Header
+  -- heartbeat led
 
-    paintutils.drawFilledBox(
-      1,1,w,3,
-      colors.gray
-    )
+  mon.setCursorPos(w-3,2)
 
-    mon.setBackgroundColor(colors.gray)
-
-    center(mon, 2, "FACTORY OS", colors.black)
-
-    mon.setBackgroundColor(colors.black)
-
-    -- Main
-
-    center(mon, 6, "MONITOR #" .. i, colors.lime)
-
-    mon.setTextColor(colors.lightGray)
-
-    center(mon, 9, w .. " x " .. h)
-
-    center(mon, 11, peripheral.getName(mon))
-
-  end)
-end
-
--- =========================================================
---  Heartbeat
--- =========================================================
-
-local tick = 0
-
-while true do
-
-  tick = tick + 1
-
-  for i, mon in ipairs(monitors) do
-
-    pcall(function()
-
-      local w, h = mon.getSize()
-
-      mon.setCursorPos(2, h - 1)
-
-      mon.setTextColor(colors.cyan)
-
-      mon.clearLine()
-
-      mon.write(
-        "ONLINE  #" .. i ..
-        "  TICK " .. tick
-      )
-
-    end)
+  if heartbeat then
+    mon.setBackgroundColor(colors.lime)
+  else
+    mon.setBackgroundColor(colors.green)
   end
 
-  sleep(1)
+  mon.write(" ")
+
+  mon.setBackgroundColor(colors.black)
 end
+
+-- =========================================================
+--  Receive telemetry
+-- =========================================================
+
+local function networkLoop()
+
+  while true do
+
+    local id, msg, protocol =
+      rednet.receive("factoryos")
+
+    if type(msg) == "table" then
+
+      if msg.type == "storage_update" then
+
+        latest = msg
+      end
+    end
+  end
+end
+
+-- =========================================================
+--  UI loop
+-- =========================================================
+
+local function uiLoop()
+
+  local heartbeat = false
+
+  while true do
+
+    heartbeat = not heartbeat
+
+    for _, mon in ipairs(monitors) do
+
+      pcall(function()
+
+        mon.setTextScale(0.5)
+
+        draw(mon, heartbeat)
+
+      end)
+    end
+
+    sleep(0.5)
+  end
+end
+
+parallel.waitForAny(
+  networkLoop,
+  uiLoop
+)
