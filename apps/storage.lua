@@ -21,8 +21,8 @@ local config   = dofile("/lib/config.lua")
 
 local PROTOCOL = config.protocol()
 
-local reset = ui.resetTerm
-local led   = ui.ledTerm
+local resetTerm = ui.resetTerm
+local ledTerm   = ui.ledTerm
 
 -- =========================================================
 --  Peripherals
@@ -61,10 +61,11 @@ local latestExport = "none"
 
 local stockMap = {}
 
-local _cfg      = config.load("storage")
-local nodeName  = _cfg.name
-local nodeLabel = _cfg.label
-local nodeGroup = _cfg.group
+local _cfg        = config.load("storage")
+local nodeName    = _cfg.name
+local nodeLabel   = _cfg.label
+local nodeGroup   = _cfg.group
+local factoryName = _cfg.factory_name
 
 -- =========================================================
 --  Policies
@@ -206,26 +207,9 @@ end
 -- =========================================================
 
 local function drawStatus()
+  ui.nodeHeader("storage", nodeLabel, nodeGroup, factoryName, wirelessSide ~= nil)
 
-  reset()
-
-  term.setTextColor(colors.orange)
-
-  print("Factory OS Storage Node v1.6")
-
-  print("")
-
-  led(colors.lime, "Heartbeat")
-  led(wirelessSide and colors.cyan or colors.gray, "NET")
-  led(colors.orange, "Overflow Export")
-
-  print("")
-
-  term.setTextColor(colors.white)
-  print("Latest Export:")
-
-  term.setTextColor(colors.lightGray)
-  print(latestExport)
+  ledTerm(colors.orange, "Export: " .. latestExport)
 
   print("")
 
@@ -291,7 +275,7 @@ local function configLoop()
 
     if item and item ~= lastDepotItem then
 
-      reset()
+      resetTerm()
 
       term.setTextColor(colors.orange)
 

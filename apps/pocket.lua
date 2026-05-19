@@ -80,8 +80,19 @@ local function networkLoop()
           scheduleTotal   = msg.scheduleTotal,
           alarm           = false,
         }
+      elseif msg.type == "power_status" then
+        nodes[msg.node] = {
+          app      = "power",
+          label    = msg.label or msg.node,
+          group    = msg.group or "",
+          lastSeen = os.epoch("utc"),
+          stress   = msg.stress,
+          capacity = msg.capacity,
+          percent  = msg.percent or 0,
+          alarm    = msg.alarm,
+        }
       elseif msg.type == "alarm" then
-        addAlarm(tostring(msg.node) .. " " .. tostring(msg.message))
+        addAlarm((msg.label or tostring(msg.node)) .. " " .. tostring(msg.message))
       end
     end
   end

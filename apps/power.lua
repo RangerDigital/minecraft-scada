@@ -24,10 +24,11 @@ local PROTOCOL = config.protocol()
 --  Node identity
 -- =========================================================
 
-local _cfg      = config.load("power")
-local nodeName  = _cfg.name
-local nodeLabel = _cfg.label
-local nodeGroup = _cfg.group
+local _cfg        = config.load("power")
+local nodeName    = _cfg.name
+local nodeLabel   = _cfg.label
+local nodeGroup   = _cfg.group
+local factoryName = _cfg.factory_name
 
 -- =========================================================
 --  Peripheral discovery
@@ -164,21 +165,7 @@ local heartbeat = false
 
 local function drawTerminal()
   local W = term.getSize()
-  term.setBackgroundColor(colors.black)
-  term.clear()
-  term.setCursorPos(1, 1)
-
-  term.setTextColor(colors.orange)
-  print("FACTORY OS - POWER")
-  term.setTextColor(colors.gray)
-  print(("-"):rep(W))
-
-  ledTerm(colors.lime,   "Node:   " .. nodeName)
-  ledTerm(colors.cyan,   "Label:  " .. nodeLabel)
-  ledTerm(colors.purple, "Group:  " .. (nodeGroup ~= "" and nodeGroup or "(none)"))
-
-  term.setTextColor(colors.gray)
-  print(("-"):rep(W))
+  ui.nodeHeader("power", nodeLabel, nodeGroup, factoryName, wirelessSide ~= nil)
 
   -- Stress bar
   local stressColor = powerState.alarm         and colors.red
@@ -203,8 +190,7 @@ local function drawTerminal()
   term.setTextColor(colors.gray)
   print(("-"):rep(W))
 
-  ledTerm(colors.lime, "HB:     " .. tostring(heartbeat))
-  ledTerm(colors.cyan, "NET:    " .. tostring(wirelessSide))
+  ledTerm(colors.lime, "HB:     " .. (heartbeat and "●" or "○"))
 end
 
 -- =========================================================

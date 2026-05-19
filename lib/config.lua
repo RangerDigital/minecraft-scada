@@ -80,10 +80,16 @@ local function load(appPrefix)
 end
 
 -- Return the rednet protocol string for this node's factory.
--- Nodes with different factory names are fully isolated.
+-- Default (no file, blank, or "main") returns "factoryos" for
+-- backward compatibility with existing installations.
+-- A custom factory_name yields "factoryos_<name>", isolating
+-- this system from all others in the same world.
 local function protocol()
-  local factoryName = readFile(FILES.factory_name) or "main"
-  return "factoryos_" .. factoryName
+  local factoryName = readFile(FILES.factory_name)
+  if factoryName and factoryName ~= "" and factoryName ~= "main" then
+    return "factoryos_" .. factoryName
+  end
+  return "factoryos"
 end
 
 -- Interactive wizard – prompts the user to set all shared
@@ -132,9 +138,10 @@ local function setup()
   -- Factory name
   term.setTextColor(colors.yellow)
   print("")
-  print("Factory Name  (isolates this system;")
-  print("  nodes must share the same name)")
-  local factory_name = prompt(">", current.factory_name, "main")
+  print("Factory Name  (optional; leave blank for")
+  print("  the default network. Set a custom name")
+  print("  to isolate this factory from others.)")
+  local factory_name = prompt(">", current.factory_name, "")
   factory_name = factory_name:gsub("%s+", "_"):lower()
   writeFile(FILES.factory_name, factory_name)
 

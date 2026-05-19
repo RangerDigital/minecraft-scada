@@ -19,10 +19,11 @@ local PROTOCOL = config.protocol()
 --  Node identity
 -- =========================================================
 
-local _cfg      = config.load("trains")
-local nodeName  = _cfg.name
-local nodeLabel = _cfg.label
-local nodeGroup = _cfg.group
+local _cfg        = config.load("trains")
+local nodeName    = _cfg.name
+local nodeLabel   = _cfg.label
+local nodeGroup   = _cfg.group
+local factoryName = _cfg.factory_name
 
 -- =========================================================
 --  Peripheral discovery
@@ -286,45 +287,15 @@ end
 
 local heartbeat = false
 
-local function printLed(color, label, active)
-  if active then
-    term.setBackgroundColor(color)
-    term.setTextColor(colors.black)
-    term.write(" ")
-    term.setBackgroundColor(colors.black)
-    term.setTextColor(color)
-    term.write(" " .. label .. "  ")
-  else
-    term.setBackgroundColor(colors.black)
-    term.setTextColor(colors.gray)
-    term.write("   " .. label .. "  ")
-  end
-end
-
 local function drawTerminal()
   local W = term.getSize()
-  term.setBackgroundColor(colors.black)
-  term.clear()
-  term.setCursorPos(1, 1)
-
-  -- Header
-  term.setTextColor(colors.orange)
-  term.write("Factory OS  Train Node v2.0")
-  term.setCursorPos(1, 2)
-  printLed(colors.lime, "HB",  heartbeat)
-  printLed(wirelessSide and colors.cyan or colors.red, "NET", wirelessSide ~= nil)
-  printLed(anyAlarm() and colors.red or colors.gray, "ALARM", anyAlarm())
-  print("")
-
-  -- Identity
+  ui.nodeHeader("trains", nodeLabel, nodeGroup, factoryName, wirelessSide ~= nil)
+  ledTerm(anyAlarm() and colors.red or colors.gray,
+    "Alarm:  " .. (anyAlarm() and "ACTIVE" or "none"))
+  ledTerm(colors.lightGray, "Stations: " .. #stations)
+  ledTerm(colors.lime, "HB:     " .. (heartbeat and "●" or "○"))
   term.setTextColor(colors.gray)
-  print(string.format("Node:  %-20s  Stations: %d", nodeName, #stations))
-  term.setTextColor(colors.white)
-  print(string.format("Label: %s", nodeLabel))
-  if nodeGroup ~= "" then
-    term.setTextColor(colors.orange)
-    print(string.format("Group: %s", nodeGroup))
-  end
+  print(("-"):rep(W))
 
   if #stations == 0 then
     print("")

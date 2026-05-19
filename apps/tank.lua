@@ -21,10 +21,11 @@ local PROTOCOL = config.protocol()
 --  Node identity
 -- =========================================================
 
-local _cfg      = config.load("tank")
-local nodeName  = _cfg.name
-local nodeLabel = _cfg.label
-local nodeGroup = _cfg.group
+local _cfg        = config.load("tank")
+local nodeName    = _cfg.name
+local nodeLabel   = _cfg.label
+local nodeGroup   = _cfg.group
+local factoryName = _cfg.factory_name
 
 -- =========================================================
 --  Tank capacity config
@@ -258,6 +259,7 @@ local function broadcastStatus()
       rednet.broadcast({
         type    = "alarm",
         node    = s.node,
+        label   = tankLabel,
         level   = "warning",
         message = "Tank low: " .. s.percent .. "%",
         ts      = os.epoch("utc"),
@@ -303,21 +305,14 @@ local function anyAlarm()
 end
 
 local function drawTerminal()
-  resetTerm()
-
-  term.setTextColor(colors.orange)
-  print("Factory OS Tank Node v2.0")
-  print("")
-
-  ledTerm(colors.lime, "Heartbeat")
-  ledTerm(wirelessSide and colors.cyan or colors.red, "Network")
-  ledTerm(anyAlarm() and colors.red or colors.gray, "Alarm")
-
-  print("")
-
+  local W = term.getSize()
+  ui.nodeHeader("tank", nodeLabel, nodeGroup, factoryName, wirelessSide ~= nil)
+  ledTerm(anyAlarm() and colors.red or colors.gray,
+    "Alarm:  " .. (anyAlarm() and "ACTIVE" or "none"))
+  ledTerm(colors.lightGray, "Tanks:  " .. #tanks)
+  ledTerm(colors.lime, "HB:     " .. (heartbeat and "●" or "○"))
   term.setTextColor(colors.gray)
-  print("Node: " .. nodeName)
-  print("Tanks: " .. #tanks)
+  print(("-"):rep(W))
 
   if #tankStates == 0 then
     print("")
