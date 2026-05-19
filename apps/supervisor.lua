@@ -335,7 +335,9 @@ local function widgetPower(mon, name, node, ox, y, w, budget)
   end
 
   return row
-end(mon, name, node, ox, y, w, budget)
+end
+
+local function widgetTrain(mon, name, node, ox, y, w, budget)
   local alive = nodeAlive(node)
   local lblW  = math.max(14, w - ox - 16)
   local lbl   = shortName(node.label or name, lblW)
