@@ -27,6 +27,48 @@ local nodeLabel = _cfg.label
 local nodeGroup = _cfg.group
 
 -- =========================================================
+--  Tank capacity config
+-- =========================================================
+
+local CAPACITY_FILE = "/config/tank_capacity.txt"
+
+local function setupCapacity()
+  ui.resetTerm()
+  term.setTextColor(colors.orange)
+  print("====================================")
+  print("      TANK CAPACITY SETUP")
+  print("====================================")
+  print("")
+  term.setTextColor(colors.lightGray)
+  print("Enter tank capacity in mB.")
+  print("Press Enter to use default.")
+  print("")
+  term.setTextColor(colors.yellow)
+  print("Examples:")
+  print("  16000   small barrel")
+  print("  432000  large tank (default)")
+  print("  1000000 fluid vault")
+  print("")
+  term.setTextColor(colors.gray)
+  print("[" .. CONFIG.capacityFallback .. "]")
+  term.setTextColor(colors.white)
+  write("> ")
+  local input = read()
+  local cap = tonumber(input) or CONFIG.capacityFallback
+  local f = fs.open(CAPACITY_FILE, "w")
+  f.write(tostring(math.floor(cap)))
+  f.close()
+  term.setTextColor(colors.lime)
+  print("Capacity: " .. math.floor(cap) .. " mB")
+  sleep(1)
+  return math.floor(cap)
+end
+
+local capRaw = util.readFile(CAPACITY_FILE)
+local tankCapacity = (capRaw and tonumber(capRaw)) or setupCapacity()
+CONFIG.capacityFallback = tankCapacity
+
+-- =========================================================
 --  Peripheral discovery
 -- =========================================================
 
