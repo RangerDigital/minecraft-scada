@@ -190,7 +190,7 @@ local function drawTerminal()
   term.setTextColor(colors.gray)
   print(("-"):rep(W))
 
-  ledTerm(colors.lime, "HB:     " .. (heartbeat and "●" or "○"))
+  ledTerm(heartbeat and colors.lime or colors.gray, "Heartbeat")
 end
 
 -- =========================================================

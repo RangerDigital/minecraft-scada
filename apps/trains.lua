@@ -293,7 +293,7 @@ local function drawTerminal()
   ledTerm(anyAlarm() and colors.red or colors.gray,
     "Alarm:  " .. (anyAlarm() and "ACTIVE" or "none"))
   ledTerm(colors.lightGray, "Stations: " .. #stations)
-  ledTerm(colors.lime, "HB:     " .. (heartbeat and "●" or "○"))
+  ledTerm(heartbeat and colors.lime or colors.gray, "Heartbeat")
   term.setTextColor(colors.gray)
   print(("-"):rep(W))
 

@@ -269,13 +269,21 @@ local function drawUI(heartbeat)
       -- Value column
       if node.app == "tank" then
         local pct      = node.percent or 0
+        local trend    = node.trend or 0
         local barColor = (alm or pct <= 20) and colors.red
                       or pct <= 50          and colors.yellow
                       or                        colors.lime
+        local tArrow, tColor = " ", colors.gray
+        if math.abs(trend) > 10 then
+          tArrow = trend > 0 and "\30" or "\31"
+          tColor = trend > 0 and colors.lime or colors.red
+        end
         term.setCursorPos(valCol, y)
-        fillBar(pct, barColor, barW)
+        fillBar(pct, barColor, barW - 1)
         term.setTextColor(barColor)
         term.write(string.format("%3d%%", pct))
+        term.setTextColor(tColor)
+        term.write(tArrow)
 
       elseif node.app == "power" then
         local pct      = node.percent or 0

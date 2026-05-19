@@ -280,28 +280,57 @@ local function widgetTank(mon, name, node, ox, y, w, budget)
   end
   mon.setBackgroundColor(colors.black)
 
+  if budget < 3 then return 2 end
+
+  -- Trend row: show rate of change if significant
+  local trend = node.trend or 0
+  local absT  = math.abs(trend)
+  if absT > 5 then
+    local arrow  = trend > 0 and "\30" or "\31"   -- ▲ / ▼ (CC:Tweaked CP437)
+    local tColor = trend > 0 and colors.lime or colors.red
+    local tStr
+    if absT >= 1000 then
+      tStr = string.format("%.1fk mB/s", absT / 1000)
+    else
+      tStr = math.floor(absT) .. " mB/s"
+    end
+    mon.setCursorPos(ox + 2, y + 2)
+    mon.setTextColor(tColor)
+    mon.write(arrow .. " " .. tStr)
+    return 3
+  end
+
   return 2
+end
+
+-- Format stress/capacity SU values compactly: 45000 → "45k"
+local function fmtSU(n)
+  n = math.floor(n or 0)
+  if n >= 10000 then return math.floor(n / 1000) .. "k"
+  elseif n >= 1000 then return string.format("%.1fk", n / 1000)
+  else return tostring(n)
+  end
 end
 
 local function widgetPower(mon, name, node, ox, y, w, budget)
   local alive  = nodeAlive(node)
   local pct    = node.percent or 0
-  local lblW   = math.max(16, w - ox - 18)
-  local lbl    = shortName(node.label or name, lblW)
 
   local barColor = node.alarm       and colors.red
                or pct >= 75         and colors.yellow
                or                       colors.lime
 
-  -- Row 1: LED  label  percent  stress/capacity
+  -- Row 1: LED  label  percent  stress/capacity (compact)
+  local suStr = fmtSU(node.stress) .. "/" .. fmtSU(node.capacity) .. " SU"
+  local lblW  = math.max(8, w - ox - 2 - 7 - #suStr)
+  local lbl   = shortName(node.label or name, lblW)
+
   led(mon, ox, y, alive and barColor or colors.red, true)
   mon.setCursorPos(ox + 2, y)
   mon.setTextColor(alive and barColor or colors.red)
   mon.write(string.format(
-    "%-" .. lblW .. "s %3d%%  %d/%d SU",
-    lbl, pct,
-    node.stress   or 0,
-    node.capacity or 0
+    "%-" .. lblW .. "s %3d%%  %s",
+    lbl, pct, suStr
   ))
 
   local row = 1
@@ -319,15 +348,16 @@ local function widgetPower(mon, name, node, ox, y, w, budget)
   mon.setBackgroundColor(colors.black)
   row = row + 1
 
-  -- Row 3+: speedometer readings
+  -- Row 3+: speedometer readings (named "Spd 1", "Spd 2", ...)
   local speeds = node.speeds or {}
-  for _, s in ipairs(speeds) do
+  for i, s in ipairs(speeds) do
     if row >= budget then break end
     mon.setCursorPos(ox + 2, y + row)
-    mon.setTextColor(s.rpm ~= 0 and colors.lightGray or colors.gray)
-    local sName = shortName(s.name or "?", w - ox - 12)
-    local rpmStr = tostring(math.abs(s.rpm or 0)) .. " RPM"
-    mon.write(sName)
+    local sLabel  = "Spd " .. i
+    local rpmStr  = math.abs(s.rpm or 0) .. " RPM"
+    local sColor  = s.rpm ~= 0 and colors.lightGray or colors.gray
+    mon.setTextColor(sColor)
+    mon.write(sLabel)
     mon.setCursorPos(w - #rpmStr, y + row)
     mon.setTextColor(colors.gray)
     mon.write(rpmStr)
@@ -657,17 +687,30 @@ local function networkLoop()
 
       elseif msg.type == "tank_status" then
         local prev = nodes[msg.node]
+        local now  = os.epoch("utc")
+
+        -- Rolling trend: mB/s (positive = filling, negative = draining)
+        local trend = (prev and prev.trend) or 0
+        if prev and prev.amount ~= nil and prev.lastSeen then
+          local dt = (now - prev.lastSeen) / 1000
+          if dt > 0.5 and dt < 15 then
+            local rate = ((msg.amount or 0) - prev.amount) / dt
+            trend = trend * 0.3 + rate * 0.7  -- exponential smoothing
+          end
+        end
+
         nodes[msg.node] = {
           app      = "tank",
           label    = msg.label or msg.node,
           group    = msg.group or "",
-          lastSeen = os.epoch("utc"),
+          lastSeen = now,
           fluid    = msg.fluid,
           amount   = msg.amount,
           capacity = msg.capacity,
           percent  = msg.percent or 0,
           level    = msg.level,
           alarm    = msg.alarm,
+          trend    = trend,
         }
         -- Only log on alarm state change or first seen
         if not prev then
