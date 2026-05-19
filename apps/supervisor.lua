@@ -9,9 +9,38 @@ local config   = dofile("/lib/config.lua")
 
 local PROTOCOL = config.protocol()
 
-local monitors = { peripheral.find("monitor") }
+-- Discover monitors by peripheral name for stable per-monitor addressing
+local monitorNames = {}
+for _, pname in ipairs(peripheral.getNames()) do
+  if peripheral.hasType(pname, "monitor") then
+    table.insert(monitorNames, pname)
+  end
+end
+table.sort(monitorNames)
+
+local monitors = {}
+for _, pname in ipairs(monitorNames) do
+  table.insert(monitors, peripheral.wrap(pname))
+end
 
 local wirelessModem = wireless.find()
+
+-- Supervisor config  /config/supervisor.cfg
+-- logs_monitor=<peripheral name>   e.g. logs_monitor=monitor_1
+local logsMonitorName
+do
+  local raw = util.readFile("/config/supervisor.cfg")
+  if raw then
+    for line in raw:gmatch("[^\n]+") do
+      local k, v = line:match("^(.-)=(.+)$")
+      if k and v then
+        k = k:gsub("^%s+",""):gsub("%s+$","")
+        v = v:gsub("^%s+",""):gsub("%s+$","")
+        if k == "logs_monitor" then logsMonitorName = v end
+      end
+    end
+  end
+end
 
 local nodes  = {}
 local alarms = {}
@@ -646,14 +675,17 @@ end
 --  Main monitor
 -- =========================================================
 
-local function drawMain(mon, id, heartbeat)
+-- assignedOrdering: list of group keys to draw on this monitor.
+-- nil = no live nodes at all (show waiting message).
+-- {} = nodes exist but none assigned here (show header + alarm only).
+local function drawMain(mon, id, heartbeat, assignedOrdering, assignedGroups)
   clear(mon)
 
   local w, h = mon.getSize()
 
   drawHeader(mon, id, heartbeat)
 
-  -- Alarm panel (always visible below header)
+  -- Alarm panel always visible on every main monitor
   local alarmBudget = math.min(4, math.floor((h - 1) / 3))
   local alarmUsed   = widgetAlarms(mon, 2, 2, w, alarmBudget)
 
@@ -665,40 +697,10 @@ local function drawMain(mon, id, heartbeat)
     mon.write(("-"):rep(w))
   end
 
-  -- Collect live nodes, grouped by node.group
-  local groups   = {}
-  local ordering = {}
-  local totalLive = 0
-
-  for name, node in pairs(nodes) do
-    if nodeAlive(node) then
-      local g = node.group or ""
-      if not groups[g] then
-        groups[g] = {}
-        table.insert(ordering, g)
-      end
-      table.insert(groups[g], { name = name, node = node })
-      totalLive = totalLive + 1
-    end
-  end
-
-  -- Named groups first (alphabetical), ungrouped last
-  table.sort(ordering, function(a, b)
-    if a == "" then return false end
-    if b == "" then return true  end
-    return a < b
-  end)
-
-  -- Sort entries within each group by label
-  for _, g in ipairs(ordering) do
-    table.sort(groups[g], function(a, b)
-      return (a.node.label or a.name) < (b.node.label or b.name)
-    end)
-  end
-
   local startY = sepY + 1
 
-  if totalLive == 0 then
+  -- No live nodes at all: show waiting message
+  if assignedOrdering == nil then
     mon.setCursorPos(3, startY)
     mon.setTextColor(colors.gray)
     mon.write("Waiting for SCADA nodes...")
@@ -707,12 +709,19 @@ local function drawMain(mon, id, heartbeat)
     return
   end
 
+  -- Count nodes assigned to this monitor
+  local totalLive = 0
+  for _, g in ipairs(assignedOrdering) do
+    totalLive = totalLive + #((assignedGroups or {})[g] or {})
+  end
+  if totalLive == 0 then return end
+
   local contentH = h - startY + 1
   local perNode  = math.max(2, math.floor(contentH / totalLive))
 
   local y = startY
-  for _, g in ipairs(ordering) do
-    local entries = groups[g]
+  for _, g in ipairs(assignedOrdering) do
+    local entries = (assignedGroups or {})[g] or {}
 
     -- Group header for named groups
     if g ~= "" and y <= h then
@@ -870,6 +879,7 @@ local function networkLoop()
           label        = msg.label or msg.node,
           group        = msg.group or "",
           lastSeen     = os.epoch("utc"),
+          vaults       = msg.vaults or {},
           items        = msg.items or {},
           usedSlots    = msg.usedSlots    or 0,
           totalSlots   = msg.totalSlots   or 0,
@@ -898,27 +908,127 @@ for _, mon in ipairs(monitors) do
   pcall(function() mon.setTextScale(0.5) end)
 end
 
+-- Distribute groups across multiple main monitors.
+-- Groups stay intact (never split). Assignment is sequential:
+-- fill monitor 1 up to the per-monitor target, then spill to monitor 2, etc.
+local function distributeGroups(ordering, groups, numMonitors)
+  if numMonitors <= 1 or #ordering == 0 then
+    return { ordering }
+  end
+
+  local total = 0
+  for _, g in ipairs(ordering) do total = total + #(groups[g] or {}) end
+  local targetPerMon = math.ceil(total / numMonitors)
+
+  local assignments = {}
+  for i = 1, numMonitors do assignments[i] = {} end
+
+  local monIdx  = 1
+  local monLoad = 0
+
+  for _, g in ipairs(ordering) do
+    local size = #(groups[g] or {})
+    -- Switch to next monitor before adding this group if we'd overshoot
+    -- the target and there are still monitors available
+    if monLoad > 0 and monLoad + size > targetPerMon and monIdx < numMonitors then
+      monIdx  = monIdx + 1
+      monLoad = 0
+    end
+    table.insert(assignments[monIdx], g)
+    monLoad = monLoad + size
+  end
+
+  return assignments
+end
+
 local function uiLoop()
   local heartbeat = false
 
   while true do
     heartbeat = not heartbeat
 
-    for i, mon in ipairs(monitors) do
-      pcall(function()
-        local w, h = mon.getSize()
-        local kind  = classifyMonitor(w, h)
+    -- Classify each monitor
+    local tinyMons   = {}
+    local tickerMons = {}
+    local logsMon    = nil
+    local mainMons   = {}
 
-        if kind == "ticker" then
-          drawTicker(mon, heartbeat)
-        elseif kind == "tiny" then
-          drawTiny(mon, heartbeat)
-        elseif i == 2 then
-          drawLogs(mon, heartbeat)
+    for i, pname in ipairs(monitorNames) do
+      local mon = monitors[i]
+      local w, h
+      local ok = pcall(function() w, h = mon.getSize() end)
+      if ok then
+        local kind = classifyMonitor(w, h)
+        if kind == "tiny" then
+          table.insert(tinyMons, { mon = mon })
+        elseif kind == "ticker" then
+          table.insert(tickerMons, { mon = mon })
+        elseif pname == logsMonitorName then
+          logsMon = { mon = mon, idx = i }
         else
-          drawMain(mon, i, heartbeat)
+          table.insert(mainMons, { mon = mon, idx = i })
         end
+      end
+    end
+
+    -- Tiny status monitors
+    for _, m in ipairs(tinyMons) do
+      pcall(function() drawTiny(m.mon, heartbeat) end)
+    end
+
+    -- Ticker banners
+    for _, m in ipairs(tickerMons) do
+      pcall(function() drawTicker(m.mon, heartbeat) end)
+    end
+
+    -- Logs monitor (configured via /config/supervisor.cfg)
+    if logsMon then
+      pcall(function() drawLogs(logsMon.mon, heartbeat) end)
+    end
+
+    -- Collect live nodes grouped
+    local groups    = {}
+    local ordering  = {}
+    local totalLive = 0
+
+    for name, node in pairs(nodes) do
+      if nodeAlive(node) then
+        local g = node.group or ""
+        if not groups[g] then
+          groups[g] = {}
+          table.insert(ordering, g)
+        end
+        table.insert(groups[g], { name = name, node = node })
+        totalLive = totalLive + 1
+      end
+    end
+
+    -- Named groups first (alphabetical), ungrouped last
+    table.sort(ordering, function(a, b)
+      if a == "" then return false end
+      if b == "" then return true  end
+      return a < b
+    end)
+    for _, g in ipairs(ordering) do
+      table.sort(groups[g], function(a, b)
+        return (a.node.label or a.name) < (b.node.label or b.name)
       end)
+    end
+
+    -- Draw main monitors with distributed groups
+    if #mainMons > 0 then
+      if totalLive == 0 then
+        -- Show waiting on all main monitors
+        for _, m in ipairs(mainMons) do
+          pcall(function() drawMain(m.mon, m.idx, heartbeat, nil, nil) end)
+        end
+      else
+        local assignments = distributeGroups(ordering, groups, #mainMons)
+        for i, m in ipairs(mainMons) do
+          local assigned = assignments[i] or {}
+          pcall(function() drawMain(m.mon, m.idx, heartbeat, assigned, groups) end)
+        end
+      end
     end
 
     sleep(0.5)
