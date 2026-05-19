@@ -243,51 +243,48 @@ local function widgetStorage(mon, name, node, ox, y, w, budget)
 end
 
 local function widgetTank(mon, name, node, ox, y, w, budget)
-  local pct  = node.percent or 0
-  local lblW = math.max(16, w - ox - 20)   -- leave room for " NNN%  LEVEL_STR"
+  local pct   = node.percent or 0
+  local trend = node.trend or 0
+  local absT  = math.abs(trend)
+
+  -- Header right column: show trend rate if significant, otherwise level label
+  local rightStr, rightColor
+  if absT > 5 then
+    local arrow = trend > 0 and "\30" or "\31"   -- ▲ / ▼
+    rightColor  = trend > 0 and colors.lime or colors.red
+    if absT >= 1000 then
+      rightStr = arrow .. string.format("%.1fk/s", absT / 1000)
+    else
+      rightStr = arrow .. " " .. math.floor(absT) .. "/s"
+    end
+  else
+    rightStr   = node.level or "?"
+    rightColor = node.alarm and colors.red
+              or pct < 50   and colors.yellow
+              or                colors.lime
+  end
+
+  local pctColor = node.alarm and colors.red
+                or pct < 50   and colors.yellow
+                or                colors.lime
+  -- " %3d%%  " = 7 chars; leave that + rightStr on the right
+  local lblW = math.max(8, w - ox - 2 - 7 - #rightStr)
   local lbl  = shortName(node.label or name, lblW)
 
   led(mon, ox, y, nodeAlive(node) and colors.lime or colors.red, true)
   mon.setCursorPos(ox + 2, y)
-
-  if node.alarm then
-    mon.setTextColor(colors.red)
-  elseif pct < 50 then
-    mon.setTextColor(colors.yellow)
-  else
-    mon.setTextColor(colors.lime)
-  end
-
-  mon.write(string.format(
-    "%-" .. lblW .. "s %3d%%  %-8s",
-    lbl,
-    pct,
-    node.level or "?"
-  ))
+  mon.setTextColor(pctColor)
+  mon.write(string.format("%-" .. lblW .. "s %3d%%  ", lbl, pct))
+  mon.setTextColor(rightColor)
+  mon.write(rightStr)
 
   if budget < 2 then return 1 end
 
-  -- Compute trend suffix before drawing bar so bar width adjusts
-  local trend  = node.trend or 0
-  local absT   = math.abs(trend)
-  local suffix = ""
-  local tColor = colors.gray
-  if absT > 5 then
-    local arrow = trend > 0 and "\30" or "\31"   -- ▲ / ▼
-    tColor = trend > 0 and colors.lime or colors.red
-    if absT >= 1000 then
-      suffix = " " .. arrow .. " " .. string.format("%.1fk mB/s", absT / 1000)
-    else
-      suffix = " " .. arrow .. " " .. math.floor(absT) .. " mB/s"
-    end
-  end
-
-  -- Fill bar (shortened to fit trend suffix on the same row)
-  local maxBarW = math.min(w - ox - 2, 24)
-  local barW    = maxBarW - #suffix
-  local filled  = math.floor(barW * math.min(pct, 100) / 100)
+  -- Row 2: full-width fill bar
   local barColor = node.alarm and colors.red
     or (pct < 50 and colors.yellow or colors.lime)
+  local barW   = math.min(w - ox - 2, 24)
+  local filled = math.floor(barW * math.min(pct, 100) / 100)
 
   mon.setCursorPos(ox + 2, y + 1)
   for i = 1, barW do
@@ -295,10 +292,6 @@ local function widgetTank(mon, name, node, ox, y, w, budget)
     mon.write(" ")
   end
   mon.setBackgroundColor(colors.black)
-  if suffix ~= "" then
-    mon.setTextColor(tColor)
-    mon.write(suffix)
-  end
 
   return 2
 end
@@ -348,7 +341,42 @@ local function widgetPower(mon, name, node, ox, y, w, budget)
   mon.setBackgroundColor(colors.black)
   row = row + 1
 
-  -- Row 3+: speedometer readings (named "Spd 1", "Spd 2", ...)
+  -- Stress history bar chart: vertical bars grow from bottom, height = stress %
+  -- Uses up to 3 rows. Top row = highest band (66-100%), bottom row = any value > 0.
+  -- Colors: lime < 50%  |  yellow < 75%  |  orange < 90%  |  red >= 90%
+  local history = node.history or {}
+  local sparkW  = math.min(w - ox - 2, #history)
+  local chartH  = math.min(3, budget - row)
+  if chartH > 0 and sparkW > 0 then
+    local startI = #history - sparkW + 1
+    for cr = 0, chartH - 1 do
+      -- Threshold decreases from top row to bottom row
+      local threshold = (chartH - 1 - cr) / chartH * 100
+      mon.setCursorPos(ox + 2, y + row + cr)
+      local drawn = 0
+      for i = startI, #history do
+        local p = history[i]
+        local c = (p > threshold) and (
+                    p >= 90 and colors.red
+                 or p >= 75 and colors.orange
+                 or p >= 50 and colors.yellow
+                 or             colors.lime)
+               or colors.black
+        mon.setBackgroundColor(c)
+        mon.write(" ")
+        drawn = drawn + 1
+      end
+      while drawn < sparkW do
+        mon.setBackgroundColor(colors.black)
+        mon.write(" ")
+        drawn = drawn + 1
+      end
+    end
+    mon.setBackgroundColor(colors.black)
+    row = row + chartH
+  end
+
+  -- Speedometer readings (after chart)
   local speeds = node.speeds or {}
   for i, s in ipairs(speeds) do
     if row >= budget then break end
@@ -362,30 +390,6 @@ local function widgetPower(mon, name, node, ox, y, w, budget)
     mon.setTextColor(colors.gray)
     mon.write(rpmStr)
     row = row + 1
-  end
-
-  -- Stress sparkline: color timeline (most-recent sample on the right)
-  -- Each cell background = stress level at that moment in time:
-  --   red >= 90%  |  orange >= 75%  |  yellow >= 50%  |  lime >= 25%  |  green < 25%
-  if row < budget then
-    local history = node.history or {}
-    local sparkW  = math.min(w - ox - 2, #history)
-    if sparkW > 0 then
-      local startI = #history - sparkW + 1
-      mon.setCursorPos(ox + 2, y + row)
-      for i = startI, #history do
-        local p = history[i]
-        local c = p >= 90 and colors.red
-               or p >= 75 and colors.orange
-               or p >= 50 and colors.yellow
-               or p >= 25 and colors.lime
-               or             colors.green
-        mon.setBackgroundColor(c)
-        mon.write(" ")
-      end
-      mon.setBackgroundColor(colors.black)
-      row = row + 1
-    end
   end
 
   return row
@@ -563,11 +567,6 @@ local function widgetAlarms(mon, ox, y, w, budget)
     end
   end
 
-  -- Merge log-level alarm messages into the crit list
-  for _, a in ipairs(alarms) do
-    table.insert(crits, { label = a, pct = nil, isMsg = true })
-  end
-
   table.sort(crits, function(a, b) return (a.pct or -1) < (b.pct or -1) end)
   table.sort(warns,  function(a, b) return a.pct < b.pct end)
 
@@ -596,19 +595,13 @@ local function widgetAlarms(mon, ox, y, w, budget)
   for _, e in ipairs(crits) do
     if row >= budget then break end
     mon.setCursorPos(1, y + row)
-    if e.isMsg then
-      mon.setBackgroundColor(colors.black)
-      mon.setTextColor(colors.red)
-      mon.write(("  ! " .. e.label):sub(1, w))
-    else
-      mon.setBackgroundColor(colors.red)
-      mon.setTextColor(colors.white)
-      local pctStr = e.pct   and string.format(" %3d%%", e.pct) or " ALRM"
-      local lbl    = shortName(e.label, lblW)
-      local s      = string.format("  CRIT  %-" .. lblW .. "s%s", lbl, pctStr)
-      mon.write(s:sub(1, w) .. (" "):rep(math.max(0, w - math.min(w, #s))))
-      mon.setBackgroundColor(colors.black)
-    end
+    mon.setBackgroundColor(colors.red)
+    mon.setTextColor(colors.white)
+    local pctStr = e.pct  and string.format(" %3d%%", e.pct) or " ALRM"
+    local lbl    = shortName(e.label, lblW)
+    local s      = string.format("  CRIT  %-" .. lblW .. "s%s", lbl, pctStr)
+    mon.write(s:sub(1, w) .. (" "):rep(math.max(0, w - math.min(w, #s))))
+    mon.setBackgroundColor(colors.black)
     row = row + 1
   end
 
