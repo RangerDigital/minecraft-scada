@@ -429,7 +429,29 @@ local function widgetVault(mon, name, node, ox, y, w, budget)
 
   local row = 2
 
-  -- Row 3+: tracked item counts
+  -- Per-vault breakdown (when node reports multiple named vaults)
+  local vaults = node.vaults or {}
+  if #vaults > 1 then
+    for _, v in ipairs(vaults) do
+      if row >= budget then break end
+      local vpct = v.totalSlots > 0
+        and math.floor(v.usedSlots / v.totalSlots * 100) or 0
+      local vc = vpct >= 90  and colors.red
+              or vpct >= 70  and colors.yellow
+              or                 colors.lime
+      local vlbl    = shortName(v.label or "?", w - ox - 10)
+      local vpctStr = string.format("%3d%%", vpct)
+      mon.setCursorPos(ox + 2, y + row)
+      mon.setTextColor(vc)
+      mon.write(vlbl)
+      mon.setCursorPos(w - #vpctStr, y + row)
+      mon.setTextColor(vc)
+      mon.write(vpctStr)
+      row = row + 1
+    end
+  end
+
+  -- Item counts (tracked or auto top-3)
   for _, item in ipairs(node.items or {}) do
     if row >= budget then break end
     local dName  = shortName(item.display or item.name or "?", w - ox - 10)
