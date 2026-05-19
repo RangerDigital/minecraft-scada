@@ -137,6 +137,7 @@ local files = {
   "lib/wireless.lua",
   "lib/ui.lua",
   "lib/util.lua",
+  "lib/config.lua",
 }
 
 local selfUpdated = false

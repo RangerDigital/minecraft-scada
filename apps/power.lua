@@ -13,23 +13,21 @@ local CONFIG = {
   alarmPercent  = 90,  -- stress % at which alarm triggers
 }
 
-local PROTOCOL = "factoryos"
-
 local wireless = dofile("/lib/wireless.lua")
 local ui       = dofile("/lib/ui.lua")
 local util     = dofile("/lib/util.lua")
+local config   = dofile("/lib/config.lua")
+
+local PROTOCOL = config.protocol()
 
 -- =========================================================
 --  Node identity
 -- =========================================================
 
-local nodeName =
-  util.readFile("/config/node_name.txt")
-  or os.getComputerLabel()
-  or ("power_" .. os.getComputerID())
-
-local nodeLabel = util.readFile("/config/node_label.txt") or nodeName
-local nodeGroup = util.readFile("/config/node_group.txt") or ""
+local _cfg      = config.load("power")
+local nodeName  = _cfg.name
+local nodeLabel = _cfg.label
+local nodeGroup = _cfg.group
 
 -- =========================================================
 --  Peripheral discovery

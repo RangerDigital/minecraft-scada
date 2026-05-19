@@ -73,6 +73,31 @@ print("")
 print("Selected app: " .. app)
 
 -- =========================================================
+--  Download lib/config.lua so the wizard can run
+-- =========================================================
+
+term.setTextColor(colors.cyan)
+print("")
+print("Downloading lib/config.lua")
+
+if not fs.exists("/lib") then
+  fs.makeDir("/lib")
+end
+
+shell.run(
+  "wget",
+  BASE .. "/lib/config.lua",
+  "/lib/config.lua"
+)
+
+-- =========================================================
+--  Node configuration wizard
+-- =========================================================
+
+local cfg = dofile("/lib/config.lua")
+cfg.setup()
+
+-- =========================================================
 --  Download boot files
 -- =========================================================
 

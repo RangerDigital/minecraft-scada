@@ -3,10 +3,11 @@
 --  Compact status viewer for advanced pocket computer.
 -- =========================================================
 
-local PROTOCOL = "factoryos"
-
 local wireless = dofile("/lib/wireless.lua")
 local util     = dofile("/lib/util.lua")
+local config   = dofile("/lib/config.lua")
+
+local PROTOCOL = config.protocol()
 
 local wirelessModem = wireless.find()
 

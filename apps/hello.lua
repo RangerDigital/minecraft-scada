@@ -2,11 +2,12 @@
 --  Factory OS SCADA Monitor v2.0
 -- =========================================================
 
-local PROTOCOL = "factoryos"
-
 local wireless = dofile("/lib/wireless.lua")
 local ui       = dofile("/lib/ui.lua")
 local util     = dofile("/lib/util.lua")
+local config   = dofile("/lib/config.lua")
+
+local PROTOCOL = config.protocol()
 
 local monitors = { peripheral.find("monitor") }
 
