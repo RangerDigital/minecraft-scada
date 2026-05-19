@@ -268,7 +268,59 @@ local function widgetTank(mon, name, node, ox, y, w, budget)
   return 2
 end
 
-local function widgetTrain(mon, name, node, ox, y, w, budget)
+local function widgetPower(mon, name, node, ox, y, w, budget)
+  local alive  = nodeAlive(node)
+  local pct    = node.percent or 0
+  local lblW   = math.max(16, w - ox - 18)
+  local lbl    = shortName(node.label or name, lblW)
+
+  local barColor = node.alarm       and colors.red
+               or pct >= 75         and colors.yellow
+               or                       colors.lime
+
+  -- Row 1: LED  label  percent  stress/capacity
+  led(mon, ox, y, alive and barColor or colors.red, true)
+  mon.setCursorPos(ox + 2, y)
+  mon.setTextColor(alive and barColor or colors.red)
+  mon.write(string.format(
+    "%-" .. lblW .. "s %3d%%  %d/%d SU",
+    lbl, pct,
+    node.stress   or 0,
+    node.capacity or 0
+  ))
+
+  local row = 1
+  if budget < 2 then return row end
+
+  -- Row 2: fill bar
+  local barW   = math.min(w - ox - 2, 24)
+  local filled = math.floor(barW * math.min(pct, 100) / 100)
+
+  mon.setCursorPos(ox + 2, y + row)
+  for i = 1, barW do
+    mon.setBackgroundColor(i <= filled and barColor or colors.gray)
+    mon.write(" ")
+  end
+  mon.setBackgroundColor(colors.black)
+  row = row + 1
+
+  -- Row 3+: speedometer readings
+  local speeds = node.speeds or {}
+  for _, s in ipairs(speeds) do
+    if row >= budget then break end
+    mon.setCursorPos(ox + 2, y + row)
+    mon.setTextColor(s.rpm ~= 0 and colors.lightGray or colors.gray)
+    local sName = shortName(s.name or "?", w - ox - 12)
+    local rpmStr = tostring(math.abs(s.rpm or 0)) .. " RPM"
+    mon.write(sName)
+    mon.setCursorPos(w - #rpmStr, y + row)
+    mon.setTextColor(colors.gray)
+    mon.write(rpmStr)
+    row = row + 1
+  end
+
+  return row
+end(mon, name, node, ox, y, w, budget)
   local alive = nodeAlive(node)
   local lblW  = math.max(14, w - ox - 16)
   local lbl   = shortName(node.label or name, lblW)
@@ -514,6 +566,8 @@ local function drawMain(mon, id, heartbeat)
         used = widgetTank(mon, entry.name, entry.node, 2, y, w, budget)
       elseif entry.node.app == "train" then
         used = widgetTrain(mon, entry.name, entry.node, 2, y, w, budget)
+      elseif entry.node.app == "power" then
+        used = widgetPower(mon, entry.name, entry.node, 2, y, w, budget)
       else
         led(mon, 2, y, nodeAlive(entry.node) and colors.lime or colors.gray, true)
         mon.setCursorPos(4, y)
@@ -599,6 +653,25 @@ local function networkLoop()
         -- Only log on presence state change
         if msg.present ~= wasPresent then
           addLog("train " .. tostring(msg.node) .. " " .. (msg.present and "ARRIVED" or "DEPARTED"))
+        end
+
+      elseif msg.type == "power_status" then
+        local prev = nodes[msg.node]
+        nodes[msg.node] = {
+          app      = "power",
+          label    = msg.label or msg.node,
+          group    = msg.group or "",
+          lastSeen = os.epoch("utc"),
+          stress   = msg.stress,
+          capacity = msg.capacity,
+          percent  = msg.percent or 0,
+          speeds   = msg.speeds or {},
+          alarm    = msg.alarm,
+        }
+        if not prev then
+          addLog("power " .. tostring(msg.node) .. " online")
+        elseif (msg.alarm) ~= (prev and prev.alarm) then
+          addLog("power " .. tostring(msg.node) .. " alarm:" .. tostring(msg.alarm))
         end
 
       elseif msg.type == "alarm" then
