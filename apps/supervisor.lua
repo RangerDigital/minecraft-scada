@@ -118,19 +118,33 @@ local function drawLogs(mon, heartbeat)
   clear(mon)
   local w, h = mon.getSize()
 
-  -- Header - heartbeat LED + title, no background fill
-  led(mon, 1, 1, colors.lime, heartbeat)
-  mon.setTextColor(colors.red)
-  mon.setCursorPos(3, 1)
-  mon.write("ALARMS & LOGS")
+  local hasAlarms = #alarms > 0
+
+  -- Header: red background fill when alarms present, orange title otherwise
+  mon.setCursorPos(1, 1)
+  if hasAlarms then
+    mon.setBackgroundColor(colors.red)
+    mon.setTextColor(colors.white)
+    local hdr = "  ! ALARMS & LOGS"
+    mon.write(hdr:sub(1, w) .. (" "):rep(math.max(0, w - #hdr)))
+    mon.setBackgroundColor(colors.black)
+  else
+    led(mon, 1, 1, heartbeat and colors.lime or colors.gray, heartbeat)
+    mon.setTextColor(colors.orange)
+    mon.setCursorPos(3, 1)
+    mon.write("ALARMS & LOGS")
+  end
 
   local y = 2
 
   for _, alarm in ipairs(alarms) do
     if y > h then break end
     mon.setCursorPos(1, y)
-    mon.setTextColor(colors.red)
-    mon.write(("! " .. alarm):sub(1, w))
+    mon.setBackgroundColor(colors.red)
+    mon.setTextColor(colors.white)
+    local line = ("  ! " .. alarm):sub(1, w)
+    mon.write(line .. (" "):rep(math.max(0, w - #line)))
+    mon.setBackgroundColor(colors.black)
     y = y + 1
   end
 
@@ -425,50 +439,81 @@ local function widgetAlarms(mon, ox, y, w, budget)
   local warns  = {}
 
   for name, node in pairs(nodes) do
-    if nodeAlive(node) and node.app == "tank" then
-      local pct = node.percent or 0
-      local lbl = node.label or name
-      if     pct <= CRIT_PCT then
-        table.insert(crits, { label = lbl, pct = pct })
-      elseif pct <  WARN_PCT then
-        table.insert(warns,  { label = lbl, pct = pct })
+    if nodeAlive(node) then
+      if node.app == "tank" then
+        local pct   = node.percent or 0
+        local lbl   = node.label or name
+        local fluid = node.fluid and shortName(node.fluid, 10) or nil
+        if pct <= CRIT_PCT then
+          table.insert(crits, { label = lbl, pct = pct, extra = fluid })
+        elseif pct < WARN_PCT then
+          table.insert(warns,  { label = lbl, pct = pct })
+        end
+      elseif node.alarm then
+        -- Non-tank node with an active alarm flag
+        table.insert(crits, { label = node.label or name, pct = nil, extra = node.app })
       end
     end
   end
-  table.sort(crits, function(a, b) return a.pct < b.pct end)
+
+  -- Merge log-level alarm messages into the crit list
+  for _, a in ipairs(alarms) do
+    table.insert(crits, { label = a, pct = nil, isMsg = true })
+  end
+
+  table.sort(crits, function(a, b) return (a.pct or -1) < (b.pct or -1) end)
   table.sort(warns,  function(a, b) return a.pct < b.pct end)
 
-  local row    = 0
   local active = #crits > 0 or #warns > 0
+  local lblW   = math.max(8, w - 14)
 
-  -- Summary line
-  led(mon, ox, y, active and colors.red or colors.lime, true)
-  mon.setCursorPos(ox + 2, y)
+  -- Summary header row (full-width background)
   if active then
-    mon.setTextColor(colors.red)
-    local s = "ALARMS"
+    mon.setCursorPos(1, y)
+    mon.setBackgroundColor(colors.red)
+    mon.setTextColor(colors.white)
+    local s = "  ALARMS"
     if #crits > 0 then s = s .. "  " .. #crits .. " CRIT" end
     if #warns  > 0 then s = s .. "  " .. #warns  .. " WARN" end
-    mon.write(s)
+    mon.write(s:sub(1, w) .. (" "):rep(math.max(0, w - #s)))
+    mon.setBackgroundColor(colors.black)
   else
+    led(mon, ox, y, colors.lime, true)
+    mon.setCursorPos(ox + 2, y)
     mon.setTextColor(colors.lime)
     mon.write("All clear")
   end
-  row = 1
+
+  local row = 1
 
   for _, e in ipairs(crits) do
     if row >= budget then break end
-    mon.setCursorPos(ox + 2, y + row)
-    mon.setTextColor(colors.red)
-    mon.write(string.format("CRIT  %-12s %3d%%", shortName(e.label, 12), e.pct))
+    mon.setCursorPos(1, y + row)
+    if e.isMsg then
+      mon.setBackgroundColor(colors.black)
+      mon.setTextColor(colors.red)
+      mon.write(("  ! " .. e.label):sub(1, w))
+    else
+      mon.setBackgroundColor(colors.red)
+      mon.setTextColor(colors.white)
+      local pctStr = e.pct   and string.format(" %3d%%", e.pct) or " ALRM"
+      local lbl    = shortName(e.label, lblW)
+      local s      = string.format("  CRIT  %-" .. lblW .. "s%s", lbl, pctStr)
+      mon.write(s:sub(1, w) .. (" "):rep(math.max(0, w - math.min(w, #s))))
+      mon.setBackgroundColor(colors.black)
+    end
     row = row + 1
   end
 
   for _, e in ipairs(warns) do
     if row >= budget then break end
-    mon.setCursorPos(ox + 2, y + row)
-    mon.setTextColor(colors.yellow)
-    mon.write(string.format("WARN  %-12s %3d%%", shortName(e.label, 12), e.pct))
+    mon.setCursorPos(1, y + row)
+    mon.setBackgroundColor(colors.yellow)
+    mon.setTextColor(colors.black)
+    local lbl = shortName(e.label, lblW)
+    local s   = string.format("  WARN  %-" .. lblW .. "s %3d%%", lbl, e.pct)
+    mon.write(s:sub(1, w) .. (" "):rep(math.max(0, w - math.min(w, #s))))
+    mon.setBackgroundColor(colors.black)
     row = row + 1
   end
 
@@ -605,7 +650,7 @@ local function networkLoop()
         }
         -- Only log first time or on export change
         if not prev or prevExport ~= (msg.latestExport or "none") then
-          addLog("storage " .. tostring(msg.node) .. " updated")
+          addLog((msg.label or msg.node) .. " updated")
         end
 
       elseif msg.type == "tank_status" then
@@ -624,9 +669,9 @@ local function networkLoop()
         }
         -- Only log on alarm state change or first seen
         if not prev then
-          addLog("tank " .. tostring(msg.node) .. " online")
+          addLog((msg.label or msg.node) .. " online")
         elseif (msg.alarm) ~= (prev and prev.alarm) then
-          addLog("tank " .. tostring(msg.node) .. " alarm:" .. tostring(msg.alarm))
+          addLog((msg.label or msg.node) .. (msg.alarm and " ALARM ON" or " alarm off"))
         end
 
       elseif msg.type == "train_status" then
@@ -653,7 +698,7 @@ local function networkLoop()
         }
         -- Only log on presence state change
         if msg.present ~= wasPresent then
-          addLog("train " .. tostring(msg.node) .. " " .. (msg.present and "ARRIVED" or "DEPARTED"))
+          addLog((msg.label or msg.node) .. " " .. (msg.present and "ARRIVED" or "DEPARTED"))
         end
 
       elseif msg.type == "power_status" then
@@ -670,13 +715,13 @@ local function networkLoop()
           alarm    = msg.alarm,
         }
         if not prev then
-          addLog("power " .. tostring(msg.node) .. " online")
+          addLog((msg.label or msg.node) .. " online")
         elseif (msg.alarm) ~= (prev and prev.alarm) then
-          addLog("power " .. tostring(msg.node) .. " alarm:" .. tostring(msg.alarm))
+          addLog((msg.label or msg.node) .. (msg.alarm and " ALARM ON" or " alarm off"))
         end
 
       elseif msg.type == "alarm" then
-        addAlarm(tostring(msg.node) .. ": " .. tostring(msg.message))
+        addAlarm((msg.label or tostring(msg.node)) .. ": " .. tostring(msg.message))
       end
     end
   end

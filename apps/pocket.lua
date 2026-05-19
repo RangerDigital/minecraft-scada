@@ -7,7 +7,8 @@ local wireless = dofile("/lib/wireless.lua")
 local util     = dofile("/lib/util.lua")
 local config   = dofile("/lib/config.lua")
 
-local PROTOCOL = config.protocol()
+local PROTOCOL     = config.protocol()
+local factoryLabel = config.load().factory_name
 
 local wirelessModem = wireless.find()
 
@@ -122,51 +123,59 @@ local function drawUI(heartbeat)
   term.setBackgroundColor(colors.black)
   term.clear()
 
-  -- ── Header row ───────────────────────────────────────
+  -- ── Header bar ───────────────────────────────────────
   term.setCursorPos(1, 1)
+  term.setBackgroundColor(colors.orange)
+  term.setTextColor(colors.black)
+  term.write(" FACTORY OS ")
   term.setBackgroundColor(colors.black)
-  term.setTextColor(colors.orange)
-  term.write("FactoryOS")
-
-  -- heartbeat blink right side
-  term.setCursorPos(W - 5, 1)
   term.setTextColor(colors.gray)
-  term.write("HB:")
-  term.setTextColor(heartbeat and colors.lime or colors.gray)
-  term.write(heartbeat and "\7" or " ")
+  term.write(" " .. factoryLabel)
 
-  -- NET indicator
+  -- HB blink + NET dot right-aligned
+  term.setCursorPos(W - 3, 1)
+  term.setTextColor(heartbeat and colors.lime or colors.gray)
+  term.write(heartbeat and "\4" or "\7")
   term.setCursorPos(W - 1, 1)
   term.setTextColor(wirelessModem and colors.cyan or colors.red)
   term.write("N")
+  term.setBackgroundColor(colors.black)
 
-  -- ── Alarm banner ─────────────────────────────────────
   local y = 2
-  if anyAlarm() then
+
+  -- ── Alarm banners (up to 2 rows) ──────────────────────
+  local alarmLines = {}
+  for _, node in pairs(nodes) do
+    if node.alarm and nodeAlive(node) then
+      table.insert(alarmLines, (node.label or "?") .. " alarm")
+    end
+  end
+  for _, a in ipairs(alarms) do
+    table.insert(alarmLines, a)
+  end
+
+  for i = 1, math.min(2, #alarmLines) do
+    if y >= H - 1 then break end
     term.setCursorPos(1, y)
     term.setBackgroundColor(colors.red)
     term.setTextColor(colors.white)
-    local line = "! ALARM"
-    if #alarms > 0 then
-      line = ("! " .. alarms[1]):sub(1, W)
-    end
+    local line = ("! " .. alarmLines[i]):sub(1, W)
     term.write(line .. (" "):rep(math.max(0, W - #line)))
     term.setBackgroundColor(colors.black)
     y = y + 1
   end
 
-  -- ── Separator ─────────────────────────────────────────
+  -- ── Divider ───────────────────────────────────────────
   term.setCursorPos(1, y)
   term.setTextColor(colors.gray)
   term.write(("-"):rep(W))
   y = y + 1
 
   -- ── Node list ─────────────────────────────────────────
-  -- Layout constants scaled to screen width
-  local valCol = math.max(14, math.floor(W * 0.5))
-  local lblW   = valCol - 3           -- label chars (after LED + space)
-  local barW   = W - valCol - 4       -- fill-bar chars (leave 4 for " NNN%")
-  -- Collect nodes, grouped by node.group
+  local valCol = math.max(14, math.floor(W * 0.55))
+  local lblW   = valCol - 3
+  local barW   = W - valCol - 4
+
   local groups   = {}
   local ordering = {}
 
@@ -192,55 +201,76 @@ local function drawUI(heartbeat)
   end
 
   if #ordering == 0 then
-    term.setCursorPos(1, y)
+    term.setCursorPos(2, y)
     term.setTextColor(colors.gray)
     term.write("Waiting for nodes...")
+    term.setCursorPos(1, H)
+    term.setTextColor(colors.gray)
+    term.write(("-"):rep(W))
     return
   end
 
   for _, g in ipairs(ordering) do
-    -- Group header for named groups
-    if g ~= "" and y <= H then
+    if y >= H then break end
+
+    -- Group header: gray fill + orange text
+    if g ~= "" then
       term.setCursorPos(1, y)
+      term.setBackgroundColor(colors.gray)
       term.setTextColor(colors.orange)
-      local hdr = g:sub(1, W)
+      local hdr = "  " .. g .. "  "
       term.write(hdr .. (" "):rep(math.max(0, W - #hdr)))
+      term.setBackgroundColor(colors.black)
       y = y + 1
     end
 
     for _, e in ipairs(groups[g]) do
-      if y > H then break end
+      if y >= H then break end
 
       local node  = e.node
       local alive = nodeAlive(node)
       local alm   = node.alarm
       local lbl   = node.label or e.name
 
-      -- LED dot
+      -- LED dot with alarm background highlight
       term.setCursorPos(1, y)
-      term.setBackgroundColor(colors.black)
-      if not alive then
+      if alm and alive then
+        term.setBackgroundColor(colors.red)
+        term.setTextColor(colors.white)
+        term.write("!")
+        term.setBackgroundColor(colors.black)
+      elseif not alive then
         term.setTextColor(colors.gray)
-        term.write("\7")
-      elseif alm then
-        term.setTextColor(colors.red)
         term.write("\7")
       else
         term.setTextColor(colors.lime)
         term.write("\7")
       end
 
-      -- Label (truncated)
-      local nameW = math.min(#lbl, lblW)
-      term.setTextColor(alive and colors.white or colors.gray)
-      term.write(" " .. lbl:sub(1, nameW))
+      -- Label
+      term.setTextColor(
+        not alive and colors.gray
+        or alm    and colors.red
+        or            colors.white
+      )
+      term.write(" " .. lbl:sub(1, lblW))
 
-      -- Value / status
+      -- Value column
       if node.app == "tank" then
-        local pct = node.percent or 0
+        local pct      = node.percent or 0
         local barColor = (alm or pct <= 20) and colors.red
                       or pct <= 50          and colors.yellow
-                      or colors.orange
+                      or                        colors.lime
+        term.setCursorPos(valCol, y)
+        fillBar(pct, barColor, barW)
+        term.setTextColor(barColor)
+        term.write(string.format("%3d%%", pct))
+
+      elseif node.app == "power" then
+        local pct      = node.percent or 0
+        local barColor = (alm or pct >= 90) and colors.red
+                      or pct >= 75          and colors.yellow
+                      or                        colors.lime
         term.setCursorPos(valCol, y)
         fillBar(pct, barColor, barW)
         term.setTextColor(barColor)
@@ -250,23 +280,18 @@ local function drawUI(heartbeat)
         term.setCursorPos(valCol, y)
         if not alive then
           term.setTextColor(colors.red)
-          term.write("offline")
+          term.write("OFFLINE")
         elseif node.assembling then
           term.setTextColor(colors.yellow)
-          term.write("assembling")
+          term.write("ASSEMBLING")
         elseif node.present then
           term.setTextColor(colors.lime)
-          local tStr = (node.train or "?"):sub(1, W - valCol - 4)
-          local cStr = node.cars and ("[" .. node.cars .. "c]") or ""
-          term.write((tStr .. " " .. cStr):sub(1, W - valCol))
+          local cStr = node.cars and (" " .. node.cars .. "c") or ""
+          term.write(("PRSNT" .. cStr):sub(1, W - valCol + 1))
         else
           term.setTextColor(colors.gray)
           local dest = node.scheduleCurrent
-          if dest then
-            term.write(("->" .. dest):sub(1, W - valCol))
-          else
-            term.write("empty")
-          end
+          term.write(dest and ("\16 " .. dest):sub(1, W - valCol + 1) or "empty")
         end
 
       elseif node.app == "storage" then
@@ -280,8 +305,9 @@ local function drawUI(heartbeat)
           term.write(overflow .. " overflow")
         else
           term.setTextColor(colors.lime)
-          term.write("nominal")
+          term.write("ok")
         end
+
       else
         term.setCursorPos(valCol, y)
         term.setTextColor(colors.gray)
@@ -292,12 +318,14 @@ local function drawUI(heartbeat)
     end
   end
 
-  -- ── Footer ────────────────────────────────────────────
-  if y <= H then
-    term.setCursorPos(1, H)
-    term.setTextColor(colors.gray)
-    term.write(("-"):rep(W))
-  end
+  -- ── Footer: node count ────────────────────────────────
+  local total = 0
+  for _ in pairs(nodes) do total = total + 1 end
+  term.setCursorPos(1, H)
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.gray)
+  local footer = " " .. total .. " node" .. (total == 1 and "" or "s")
+  term.write(footer .. (" "):rep(math.max(0, W - #footer)))
 end
 
 -- =========================================================
