@@ -267,9 +267,25 @@ local function widgetTank(mon, name, node, ox, y, w, budget)
 
   if budget < 2 then return 1 end
 
-  -- Fill bar
-  local barW   = math.min(w - ox - 2, 24)
-  local filled = math.floor(barW * math.min(pct, 100) / 100)
+  -- Compute trend suffix before drawing bar so bar width adjusts
+  local trend  = node.trend or 0
+  local absT   = math.abs(trend)
+  local suffix = ""
+  local tColor = colors.gray
+  if absT > 5 then
+    local arrow = trend > 0 and "\30" or "\31"   -- ▲ / ▼
+    tColor = trend > 0 and colors.lime or colors.red
+    if absT >= 1000 then
+      suffix = " " .. arrow .. " " .. string.format("%.1fk mB/s", absT / 1000)
+    else
+      suffix = " " .. arrow .. " " .. math.floor(absT) .. " mB/s"
+    end
+  end
+
+  -- Fill bar (shortened to fit trend suffix on the same row)
+  local maxBarW = math.min(w - ox - 2, 24)
+  local barW    = maxBarW - #suffix
+  local filled  = math.floor(barW * math.min(pct, 100) / 100)
   local barColor = node.alarm and colors.red
     or (pct < 50 and colors.yellow or colors.lime)
 
@@ -279,25 +295,9 @@ local function widgetTank(mon, name, node, ox, y, w, budget)
     mon.write(" ")
   end
   mon.setBackgroundColor(colors.black)
-
-  if budget < 3 then return 2 end
-
-  -- Trend row: show rate of change if significant
-  local trend = node.trend or 0
-  local absT  = math.abs(trend)
-  if absT > 5 then
-    local arrow  = trend > 0 and "\30" or "\31"   -- ▲ / ▼ (CC:Tweaked CP437)
-    local tColor = trend > 0 and colors.lime or colors.red
-    local tStr
-    if absT >= 1000 then
-      tStr = string.format("%.1fk mB/s", absT / 1000)
-    else
-      tStr = math.floor(absT) .. " mB/s"
-    end
-    mon.setCursorPos(ox + 2, y + 2)
+  if suffix ~= "" then
     mon.setTextColor(tColor)
-    mon.write(arrow .. " " .. tStr)
-    return 3
+    mon.write(suffix)
   end
 
   return 2
@@ -362,6 +362,30 @@ local function widgetPower(mon, name, node, ox, y, w, budget)
     mon.setTextColor(colors.gray)
     mon.write(rpmStr)
     row = row + 1
+  end
+
+  -- Stress sparkline: color timeline (most-recent sample on the right)
+  -- Each cell background = stress level at that moment in time:
+  --   red >= 90%  |  orange >= 75%  |  yellow >= 50%  |  lime >= 25%  |  green < 25%
+  if row < budget then
+    local history = node.history or {}
+    local sparkW  = math.min(w - ox - 2, #history)
+    if sparkW > 0 then
+      local startI = #history - sparkW + 1
+      mon.setCursorPos(ox + 2, y + row)
+      for i = startI, #history do
+        local p = history[i]
+        local c = p >= 90 and colors.red
+               or p >= 75 and colors.orange
+               or p >= 50 and colors.yellow
+               or p >= 25 and colors.lime
+               or             colors.green
+        mon.setBackgroundColor(c)
+        mon.write(" ")
+      end
+      mon.setBackgroundColor(colors.black)
+      row = row + 1
+    end
   end
 
   return row
@@ -800,7 +824,12 @@ local function networkLoop()
         end
 
       elseif msg.type == "power_status" then
-        local prev = nodes[msg.node]
+        local prev    = nodes[msg.node]
+        -- Carry forward stress history (one sample per telemetry tick, max 60)
+        local history = (prev and prev.history) or {}
+        table.insert(history, msg.percent or 0)
+        while #history > 60 do table.remove(history, 1) end
+
         nodes[msg.node] = {
           app      = "power",
           label    = msg.label or msg.node,
@@ -811,6 +840,7 @@ local function networkLoop()
           percent  = msg.percent or 0,
           speeds   = msg.speeds or {},
           alarm    = msg.alarm,
+          history  = history,
         }
         if not prev then
           addLog((msg.label or msg.node) .. " online")

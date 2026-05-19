@@ -53,15 +53,27 @@ local function networkLoop()
           alarm    = false,
         }
       elseif msg.type == "tank_status" then
+        local prev  = nodes[msg.node]
+        local now   = os.epoch("utc")
+        local trend = (prev and prev.trend) or 0
+        if prev and prev.amount ~= nil and prev.lastSeen then
+          local dt = (now - prev.lastSeen) / 1000
+          if dt > 0.5 and dt < 15 then
+            local rate = ((msg.amount or 0) - (prev.amount or 0)) / dt
+            trend = trend * 0.3 + rate * 0.7
+          end
+        end
         nodes[msg.node] = {
           app      = "tank",
           label    = msg.label or msg.node,
           group    = msg.group or "",
-          lastSeen = os.epoch("utc"),
+          lastSeen = now,
           fluid    = msg.fluid,
+          amount   = msg.amount,
           percent  = msg.percent or 0,
           level    = msg.level,
           alarm    = msg.alarm,
+          trend    = trend,
         }
       elseif msg.type == "train_status" then
         nodes[msg.node] = {
