@@ -29,6 +29,7 @@ print("- storage")
 print("- tank")
 print("- trains")
 print("- power")
+print("- vault")
 
 print("")
 

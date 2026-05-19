@@ -367,6 +367,57 @@ local function widgetPower(mon, name, node, ox, y, w, budget)
   return row
 end
 
+local function widgetVault(mon, name, node, ox, y, w, budget)
+  local alive    = nodeAlive(node)
+  local pct      = node.spacePercent or 0
+  local freeS    = node.freeSlots  or 0
+  local totS     = node.totalSlots or 0
+
+  local spColor = node.alarm  and colors.red
+               or pct >= 70   and colors.yellow
+               or                  colors.lime
+
+  -- Row 1: LED + label + free slots count
+  local spcStr = freeS .. "/" .. totS .. " free"
+  local lblW   = math.max(8, w - ox - 2 - 6 - #spcStr)
+  local lbl    = shortName(node.label or name, lblW)
+
+  led(mon, ox, y, alive and (node.alarm and colors.red or colors.lime) or colors.red, true)
+  mon.setCursorPos(ox + 2, y)
+  mon.setTextColor(alive and spColor or colors.red)
+  mon.write(string.format("%-" .. lblW .. "s %3d%%  %s", lbl, pct, spcStr))
+
+  if budget < 2 then return 1 end
+
+  -- Row 2: fill bar (shows % full)
+  local barW   = math.min(w - ox - 2, 24)
+  local filled = math.floor(barW * math.min(pct, 100) / 100)
+  mon.setCursorPos(ox + 2, y + 1)
+  for i = 1, barW do
+    mon.setBackgroundColor(i <= filled and spColor or colors.gray)
+    mon.write(" ")
+  end
+  mon.setBackgroundColor(colors.black)
+
+  local row = 2
+
+  -- Row 3+: tracked item counts
+  for _, item in ipairs(node.items or {}) do
+    if row >= budget then break end
+    local dName  = shortName(item.display or item.name or "?", w - ox - 10)
+    local cntStr = tostring(item.count or 0)
+    mon.setCursorPos(ox + 2, y + row)
+    mon.setTextColor(item.count > 0 and colors.lightGray or colors.gray)
+    mon.write(dName)
+    mon.setCursorPos(w - #cntStr, y + row)
+    mon.setTextColor(item.count > 0 and colors.white or colors.gray)
+    mon.write(cntStr)
+    row = row + 1
+  end
+
+  return row
+end
+
 local function widgetTrain(mon, name, node, ox, y, w, budget)
   local alive = nodeAlive(node)
   local lblW  = math.max(14, w - ox - 16)
@@ -646,6 +697,8 @@ local function drawMain(mon, id, heartbeat)
         used = widgetTrain(mon, entry.name, entry.node, 2, y, w, budget)
       elseif entry.node.app == "power" then
         used = widgetPower(mon, entry.name, entry.node, 2, y, w, budget)
+      elseif entry.node.app == "vault" then
+        used = widgetVault(mon, entry.name, entry.node, 2, y, w, budget)
       else
         led(mon, 2, y, nodeAlive(entry.node) and colors.lime or colors.gray, true)
         mon.setCursorPos(4, y)
@@ -758,6 +811,26 @@ local function networkLoop()
           percent  = msg.percent or 0,
           speeds   = msg.speeds or {},
           alarm    = msg.alarm,
+        }
+        if not prev then
+          addLog((msg.label or msg.node) .. " online")
+        elseif (msg.alarm) ~= (prev and prev.alarm) then
+          addLog((msg.label or msg.node) .. (msg.alarm and " ALARM ON" or " alarm off"))
+        end
+
+      elseif msg.type == "vault_status" then
+        local prev = nodes[msg.node]
+        nodes[msg.node] = {
+          app          = "vault",
+          label        = msg.label or msg.node,
+          group        = msg.group or "",
+          lastSeen     = os.epoch("utc"),
+          items        = msg.items or {},
+          usedSlots    = msg.usedSlots    or 0,
+          totalSlots   = msg.totalSlots   or 0,
+          freeSlots    = msg.freeSlots    or 0,
+          spacePercent = msg.spacePercent or 0,
+          alarm        = msg.alarm,
         }
         if not prev then
           addLog((msg.label or msg.node) .. " online")

@@ -91,6 +91,18 @@ local function networkLoop()
           percent  = msg.percent or 0,
           alarm    = msg.alarm,
         }
+      elseif msg.type == "vault_status" then
+        nodes[msg.node] = {
+          app          = "vault",
+          label        = msg.label or msg.node,
+          group        = msg.group or "",
+          lastSeen     = os.epoch("utc"),
+          items        = msg.items or {},
+          freeSlots    = msg.freeSlots  or 0,
+          totalSlots   = msg.totalSlots or 0,
+          spacePercent = msg.spacePercent or 0,
+          alarm        = msg.alarm,
+        }
       elseif msg.type == "alarm" then
         addAlarm((msg.label or tostring(msg.node)) .. " " .. tostring(msg.message))
       end
@@ -326,6 +338,16 @@ local function drawUI(heartbeat)
           term.setTextColor(colors.lime)
           term.write("ok")
         end
+
+      elseif node.app == "vault" then
+        local pct      = node.spacePercent or 0
+        local spColor  = (alm or pct >= 90) and colors.red
+                      or pct >= 70           and colors.yellow
+                      or                        colors.lime
+        term.setCursorPos(valCol, y)
+        fillBar(pct, spColor, barW)
+        term.setTextColor(spColor)
+        term.write(string.format("%3d%%", pct))
 
       else
         term.setCursorPos(valCol, y)
