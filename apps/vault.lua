@@ -43,10 +43,12 @@ local resetTerm  = ui.resetTerm
 local ledTerm    = ui.ledTerm
 local statusLine = ui.statusLine
 
--- Discover inventory peripherals by name for stable ordering
+-- Discover inventory peripherals by name for stable ordering.
+-- Uses hasType() so modded peripherals (e.g. Create Item Vault)
+-- are found even when their primary type is not "inventory".
 local invPeriphNames = {}
 for _, pname in ipairs(peripheral.getNames()) do
-  if peripheral.getType(pname) == "inventory" then
+  if peripheral.hasType(pname, "inventory") then
     table.insert(invPeriphNames, pname)
   end
 end
