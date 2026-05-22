@@ -26,8 +26,8 @@
 local ui   = dofile("/lib/ui.lua")
 local util = dofile("/lib/util.lua")
 
-local IN_SIDE       = "front"
-local OUT_SIDE      = "back"
+local IN_SIDE       = "back"
+local OUT_SIDE      = "front"
 local VAULT_REFRESH = 2   -- seconds between vault reads
 
 -- =========================================================
@@ -183,8 +183,8 @@ local function drawStatus()
   monStatus.write(string.sub(title, 1, W) .. string.rep(" ", math.max(0, W - #title)))
   monStatus.setBackgroundColor(colors.black)
 
-  -- Row 2: heavy separator
-  monSep(monStatus, 2, "=")
+  -- Row 2: blank padding
+  -- (empty row)
 
   -- Row 3: system status
   ui.led(monStatus, 1, 3, colors.lime, true)
@@ -246,8 +246,8 @@ local function drawVault(items, capacity)
   monVault.write(string.sub(title, 1, W) .. string.rep(" ", math.max(0, W - #title)))
   monVault.setBackgroundColor(colors.black)
 
-  -- Row 2: heavy separator
-  monSep(monVault, 2, "=")
+  -- Row 2: blank padding
+  -- (empty row)
 
   if not items then
     ui.led(monVault, 1, 3, colors.red, true)
