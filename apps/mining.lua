@@ -26,8 +26,10 @@
 local ui   = dofile("/lib/ui.lua")
 local util = dofile("/lib/util.lua")
 
-local IN_SIDE       = "back"
-local OUT_SIDE      = "front"
+local RELAY_IN  = "back"
+local RELAY_OUT = "front"
+local CPU_IN    = "front"
+local CPU_OUT   = "back"
 local VAULT_REFRESH = 2   -- seconds between vault reads
 
 -- =========================================================
@@ -103,10 +105,11 @@ end
 -- =========================================================
 
 -- input/output = nil means use the computer's own redstone API
+-- inSide/outSide differ: relays are mounted reversed vs the computer
 local CHANNELS = {
-  { label = "Fuel Pump",  input = relayLeft,  output = relayLeft  },
-  { label = "Drills",     input = relayRight, output = relayRight },
-  { label = "Ejec. Port", input = nil,        output = nil        },
+  { label = "Drills",     input = relayLeft,  output = relayLeft,  inSide = RELAY_IN,  outSide = RELAY_OUT },
+  { label = "Ejec. Port", input = relayRight, output = relayRight, inSide = RELAY_IN,  outSide = RELAY_OUT },
+  { label = "Fuel Pump",  input = nil,        output = nil,        inSide = CPU_IN,    outSide = CPU_OUT   },
 }
 
 -- =========================================================
@@ -120,13 +123,13 @@ local outputs = { true, true, true }
 local prevIn  = { false, false, false }
 
 local function readInput(ch)
-  if ch.input then return ch.input.getInput(IN_SIDE) end
-  return redstone.getInput(IN_SIDE)
+  if ch.input then return ch.input.getInput(ch.inSide) end
+  return redstone.getInput(ch.inSide)
 end
 
 local function writeOutput(ch, val)
-  if ch.output then ch.output.setOutput(OUT_SIDE, val)
-  else redstone.setOutput(OUT_SIDE, val) end
+  if ch.output then ch.output.setOutput(ch.outSide, val)
+  else redstone.setOutput(ch.outSide, val) end
 end
 
 local function applyOutputs()
