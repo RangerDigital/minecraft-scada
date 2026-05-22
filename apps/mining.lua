@@ -302,8 +302,18 @@ local function drawVault(items, capacity)
 end
 
 -- =========================================================
---  Terminal display
+--  Terminal: live debug display
 -- =========================================================
+
+-- Raw current readings captured each poll (updated in main loop)
+local rawIn = { false, false, false }
+local toggleCount = { 0, 0, 0 }
+
+local SIDES = { "front", "back", "left", "right", "top", "bottom" }
+
+local function boolStr(v)
+  return v and "HI" or "lo"
+end
 
 local function drawTerm()
   local W = term.getSize()
@@ -314,31 +324,53 @@ local function drawTerm()
   -- Title bar
   term.setBackgroundColor(colors.orange)
   term.setTextColor(colors.black)
-  local title = " MINING VEHICLE CONTROLLER "
+  local title = " MINING CTRL  [DEBUG] "
   term.write(title .. string.rep(" ", math.max(0, W - #title)))
   term.setCursorPos(1, 2)
   term.setBackgroundColor(colors.black)
   term.setTextColor(colors.gray)
   print(string.rep("-", W))
 
-  -- Identity
-  ui.ledTerm(colors.cyan, "Vehicle: " .. nodeLabel)
-  ui.ledTerm(colors.lime, "System:  ONLINE")
-
+  -- Relay discovery summary
+  term.setTextColor(colors.orange)
+  print(" PERIPHERALS FOUND:")
+  term.setTextColor(colors.lightGray)
+  print(string.format("  relay[1]: %s", relayList[1] and relayList[1].name or "NONE"))
+  print(string.format("  relay[2]: %s", relayList[2] and relayList[2].name or "NONE"))
   term.setTextColor(colors.gray)
   print(string.rep("-", W))
 
-  -- Channel status
+  -- Live raw inputs: all 6 sides of each relay + computer
+  term.setTextColor(colors.orange)
+  print(" RAW INPUTS  (side: relay-L / relay-R / cpu)")
+  term.setTextColor(colors.black)
+  for _, side in ipairs(SIDES) do
+    local vL   = relayList[1] and relayList[1].p.getInput(side) or false
+    local vR   = relayList[2] and relayList[2].p.getInput(side) or false
+    local vCPU = redstone.getInput(side)
+    local anyHi = vL or vR or vCPU
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(anyHi and colors.white or colors.gray)
+    print(string.format("  %-6s  %s  /  %s  /  %s",
+      side,
+      boolStr(vL), boolStr(vR), boolStr(vCPU)
+    ))
+  end
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.gray)
+  print(string.rep("-", W))
+
+  -- Channel toggle counters
+  term.setTextColor(colors.orange)
+  print(" TOGGLE EVENTS")
   for i, ch in ipairs(CHANNELS) do
     local isOn = not outputs[i]
     ui.ledTerm(
       isOn and colors.lime or colors.red,
-      ch.label .. ": " .. (isOn and "ON" or "OFF")
+      string.format("%-10s [%s] x%d", ch.label,
+        isOn and "ON " or "OFF", toggleCount[i])
     )
   end
-
-  term.setTextColor(colors.gray)
-  print(string.rep("-", W))
 end
 
 -- =========================================================
@@ -352,7 +384,7 @@ local lastVaultTime = os.epoch("utc")
 
 drawStatus()
 drawVault(vItems, vCap)
-drawTerm()
+-- drawTerm() called in main loop below
 
 while true do
   -- Poll all inputs
@@ -360,12 +392,14 @@ while true do
   for i, ch in ipairs(CHANNELS) do
     curIn[i] = readInput(ch)
   end
+  rawIn = curIn
 
   -- Rising edge → toggle output
   local changed = false
   for i = 1, #CHANNELS do
     if curIn[i] and not prevIn[i] then
       outputs[i] = not outputs[i]
+      toggleCount[i] = toggleCount[i] + 1
       changed = true
     end
   end
@@ -373,8 +407,10 @@ while true do
   if changed then
     applyOutputs()
     drawStatus()
-    drawTerm()
   end
+
+  -- Always redraw terminal so raw values update live
+  drawTerm()
 
   prevIn = curIn
 
