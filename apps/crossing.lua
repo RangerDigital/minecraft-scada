@@ -7,14 +7,19 @@
 --  Wiring:
 --    back side  – redstone input (train detector / contact)
 --    wired modem network – two Create_NixieTube peripherals
+--    speaker (any side or wired)  – plays Polish PKP bell alarm
 -- =========================================================
 
 local CONFIG = {
   pollRate    = 0.1,   -- redstone poll interval in seconds
 
-  -- Nixie display characters
-  activeChar  = "X",   -- shown while crossing is active
-  idleChar    = "-",   -- shown while crossing is clear
+  -- Idle display character (shown when crossing is clear; no signal active)
+  idleChar    = "-",
+
+  -- Speaker alarm (Polish PKP two-tone bell)
+  beepRate    = 0.5,         -- seconds between bell strikes
+  beepVolume  = 3.0,         -- 0-3
+  beepPitches = { 18, 12 },  -- alternating pitches: B4 then F#4
 
   -- Active blink signal (red, fast blink)
   activeSignal = {
@@ -66,6 +71,15 @@ for _, name in ipairs(peripheral.getNames()) do
   end
 end
 
+-- Discover speaker (any attached side or wired modem network).
+local speaker = nil
+for _, name in ipairs(peripheral.getNames()) do
+  if peripheral.getType(name) == "speaker" then
+    speaker = peripheral.wrap(name)
+    break
+  end
+end
+
 local monitors = { peripheral.find("monitor") }
 
 -- =========================================================
@@ -74,6 +88,8 @@ local monitors = { peripheral.find("monitor") }
 
 local crossingActive = false   -- current computed state
 local lastActive     = nil     -- previous state (force redraw on change)
+local lastBeepTime   = 0       -- os.epoch ms of last bell strike
+local beepPhase      = 1       -- alternates between CONFIG.beepPitches indices
 
 -- =========================================================
 --  Helpers
@@ -99,6 +115,17 @@ local function applyText(nixie, text, colour)
   end)
 end
 
+-- Play one bell strike and advance the two-tone phase.
+local function playBeep()
+  if not speaker then return end
+  local pitch = CONFIG.beepPitches[beepPhase]
+  try(function()
+    speaker.playNote("bell", CONFIG.beepVolume, pitch)
+  end)
+  beepPhase    = (beepPhase % #CONFIG.beepPitches) + 1
+  lastBeepTime = os.epoch("utc")
+end
+
 -- =========================================================
 --  Display update
 -- =========================================================
@@ -107,30 +134,14 @@ local function updateNixies(active)
   if #nixies == 0 then return end
 
   if active then
-    -- Each tube shows "X" and blinks in red.
-    -- Tube 2 blinkOffTime is offset so they alternate.
-    local sig1 = CONFIG.activeSignal[1]
-    local sig2 = CONFIG.activeSignal[2]
-
-    for i, n in ipairs(nixies) do
-      -- Set signal for blinking effect.
-      -- Both tubes are controlled through the first tube's
-      -- setSignal when they form a row; pass both as
-      -- positional args so tube 1 and tube 2 get their own
-      -- settings.
-      if i == 1 then
-        applySignal(n.p, sig1, sig2)
-      end
-      applyText(n.p, CONFIG.activeChar, "red")
+    -- Use setSignal only – setText nulls computerSignal and kills the blink.
+    -- setSignal on the first tube controls the whole row.
+    if nixies[1] then
+      applySignal(nixies[1].p, CONFIG.activeSignal[1], CONFIG.activeSignal[2])
     end
   else
-    local sig1 = CONFIG.idleSignal[1]
-    local sig2 = CONFIG.idleSignal[2]
-
-    for i, n in ipairs(nixies) do
-      if i == 1 then
-        applySignal(n.p, sig1, sig2)
-      end
+    -- Idle: setText clears computerSignal, which is what we want (no blink).
+    for _, n in ipairs(nixies) do
       applyText(n.p, CONFIG.idleChar, "green")
     end
   end
@@ -148,6 +159,10 @@ local function drawTerminal()
   ledTerm(
     #nixies > 0 and colors.lime or colors.red,
     "Nixies: " .. #nixies .. " found"
+  )
+  ledTerm(
+    speaker and colors.lime or colors.gray,
+    "Speaker: " .. (speaker and "ready" or "not found")
   )
   term.setTextColor(colors.gray)
   local W = term.getSize()
@@ -212,9 +227,19 @@ while true do
   if powered ~= crossingActive then
     crossingActive = powered
     updateNixies(crossingActive)
+    if not crossingActive then
+      beepPhase = 1  -- reset two-tone sequence when crossing clears
+    end
     redraw()
   end
 
-  -- Also redraw if monitors are attached/detached.
+  -- Ring the bell on every beepRate interval while active.
+  if crossingActive then
+    local now = os.epoch("utc")
+    if now - lastBeepTime >= CONFIG.beepRate * 1000 then
+      playBeep()
+    end
+  end
+
   os.sleep(CONFIG.pollRate)
 end
