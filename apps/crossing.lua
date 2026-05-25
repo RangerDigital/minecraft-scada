@@ -226,6 +226,7 @@ end
 -- =========================================================
 
 resetTerm()
+updateNixies(false)  -- initialise tubes to green idle state on boot
 redraw()
 
 while true do
