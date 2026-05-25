@@ -153,9 +153,10 @@ local function drawTerminal()
   local W = term.getSize()
   print(("-"):rep(W))
 
-  statusLine(term, 1, nil, colors.red,
-    "Crossing: " .. (crossingActive and "ACTIVE  (trains!)" or "clear"),
-    crossingActive)
+  ledTerm(
+    crossingActive and colors.red or colors.lime,
+    "Crossing: " .. (crossingActive and "ACTIVE  (trains!)" or "clear")
+  )
 end
 
 local function drawMonitor(mon)
