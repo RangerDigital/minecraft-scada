@@ -134,14 +134,22 @@ local function updateNixies(active)
   if #nixies == 0 then return end
 
   if active then
-    -- Use setSignal only – setText nulls computerSignal and kills the blink.
-    -- setSignal on the first tube controls the whole row.
-    if nixies[1] then
-      applySignal(nixies[1].p, CONFIG.activeSignal[1], CONFIG.activeSignal[2])
+    -- setSignal only affects the single tube it is called on (unlike setText
+    -- which walks the whole physical row).  Call it on every nixie individually.
+    for _, n in ipairs(nixies) do
+      applySignal(n.p, CONFIG.activeSignal[1], CONFIG.activeSignal[2])
     end
   else
-    -- Idle: setText clears computerSignal, which is what we want (no blink).
     for _, n in ipairs(nixies) do
+      -- Zero the signal first so blinkPeriod is forced to 0 server-side,
+      -- then setText clears computerSignal and sets the idle character.
+      -- Doing both guarantees the blink stops even if setText fails silently.
+      try(function()
+        n.p.setSignal(
+          { r=0, g=0, b=0, glowWidth=1, glowHeight=1, blinkPeriod=1, blinkOffTime=0 },
+          { r=0, g=0, b=0, glowWidth=1, glowHeight=1, blinkPeriod=1, blinkOffTime=0 }
+        )
+      end)
       applyText(n.p, CONFIG.idleChar, "green")
     end
   end
